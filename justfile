@@ -12,9 +12,14 @@ configure:
 build: configure
     cmake --build {{build_dir}}
 
-# 运行自检
-test: build
-    ./{{build_dir}}/bridge_selftest
+# Release 构建（O2 优化，独立目录）
+release:
+    cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG"
+    cmake --build build-release
+
+# 运行自检（Release 版）
+test-release: release
+    ./build-release/bridge_selftest
 
 # 运行 ctest
 ctest: build
@@ -27,4 +32,4 @@ run id="1" lat="30.0" lon="120.0" alt="10.0" simport="49000" mav="5762": build
 
 # 清理构建目录
 clean:
-    rm -rf {{build_dir}}
+    rm -rf {{build_dir}} build-release
