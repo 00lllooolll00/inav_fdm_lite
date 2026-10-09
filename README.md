@@ -16,16 +16,20 @@ INAV SITL 无头 6-DOF 飞行动力学后端 + MAVLink 双向闭环测试桥（C
 
 两条并发链路：
 
-1. **物理动力学链路（UDP）**：实现 X-Plane RREF/DREF 协议子集（对标 `fl2sitl` /
-   `codeberg.org/stronnag/flightlog2kml` 的 `pkg/sitlgen` 行为，被动监听 RREF 注册、
-   回 `xitlDrefVersion=2`、按 id 回传传感器帧；解析 DREF 电机包）。
-   四旋翼 X 构型 6DOF：油门→推力/力矩→平动/转动积分→自洽传感器（姿态、角速度、
-   经纬高、地速、比力过载、气压、地磁、GPS 星数等）。
+1. **物理动力学链路（UDP）**：实现 X-Plane RREF/DREF 协议子集（参考 `fl2sitl` / `codeberg.org/stronnag/flightlog2kml` 的 `pkg/sitlgen`），被动监听 RREF 注册、回 `xitlDrefVersion=1`、按 id 回传传感器帧，并解析 DREF 电机量。
+   四旋翼模型提供简化 Newton-Euler 刚体运动、姿态、位置、速度和传感器输出；模型范围与 JSBSim 的参考关系见下节。
 2. **MAVLink 链路（TCP Client）**：连接 SITL 串口映射 TCP 端口，自研最小 MAVLink v2
    编解码（crc_extra 取自 `c_library_v2` 实测值，支持零截断帧）。收 `HEARTBEAT` /
    `GLOBAL_POSITION_INT` / `GPS_RAW_INT` / `VFR_HUD` / `ATTITUDE` / `COMMAND_ACK`；
    发 `COMMAND_INT(DO_REPOSITION)` / `RC_CHANNELS_OVERRIDE` / `COMMAND_LONG`。
    断线自动重连（指数退避），可选 UDP 转发给 QGC。
+
+
+## 动力学范围与 JSBSim 参考
+
+FDM 采用机体系 FRD、局部地理系 NED，按 `I*omega_dot = torque - omega x (I*omega)` 更新角速度，并用归一化四元数传播姿态。这些坐标和刚体运动方程参考 [JSBSim 坐标系说明](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/user/concepts/frames-of-reference.md)、[运动方程](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/formulation/equations-of-motion.md) 及 [官方实现](https://github.com/JSBSim-Team/jsbsim)。
+
+本项目仍是轻量模型，不等同于 JSBSim：电机命令线性映射到推力，转动惯量/反扭矩/阻尼为简化参数，地面采用防穿透钳位；没有电机转速动态、旋翼入流、气动系数/风场或起落架接触动力学。X-Plane 链路只提供总油门和 yoke 控制量，缺少每个电机独立输入，因而不能从 SITL 输出还原真实四路电机差动。当前零第三方运行依赖的约束也意味着不直接链接 JSBSim。
 
 ## 构建（CMake + Ninja + just）
 
@@ -67,19 +71,20 @@ SITL 端（UART3 配 MAVLink，见下）：
 ## SITL 侧配置（关键）
 
 1. 传感器全部选 **FAKE**（GPS/IMU/气压/磁罗盘等），数据才从仿真器来。
-2. 某 UART（如 UART3）功能选 **MAVLink**，波特率任意（TCP 映射忽略波特率）；
-   SITL 的 UART3 → TCP `tcpbaseport+2`（默认 5762），桥接 `--mav-tcp-port` 对准它。
-3. CLI：`set mavlink_sysid = <--id>`（多机各不相同），`feature TELEMETRY` 按需开。
-4. 用 RC override 做解锁/模式切换时，接收机类型选 `MAVLink`（SERIALRX_MAVLINK），
-   并在 Modes 页把 ARM / POSHOLD / GCS NAV / RTH 绑到 AUX 通道。
-5. `--chanmap` 把 4 路电机映射出来（多旋翼机型），否则桥收不到油门、飞机会一直贴地。
+2. 启用 `feature TELEMETRY`，否则 SITL 不会绑定 MAVLink TCP 端口。将一个 UART 配为
+   **MAVLink**；UART N 映射到 `tcpbaseport + N - 1`（如 UART1 对应 base，UART2 对应 base+1），
+   桥接 `--mav-tcp-port` 必须指向该实际端口。
+3. CLI：`set mavlink_sysid = <id>`（多机各不相同）；用 RC override 时，接收机选
+   `MAVLink`（`SERIALRX_MAVLINK`），并在 Modes 页绑定 ARM / POSHOLD / GCS NAV / RTH。
+4. 解锁先将 ARM 开关拉低并保持数秒，再拉高；若开关自锁未解除，再拨低后拨高一次。
+5. `--chanmap` 映射电机输出；缺少它时桥收不到有效油门。
 
 ## 控制面（测试指令注入）
 
 本地 TCP 文本协议（`--ctl-port` 开启，仅监听 127.0.0.1），一行一条，回复 `OK/ERR`：
 
 ```bash
-# GUIDED 下打临时航点（Index 255，需先切 POSHOLD+GCS NAV）
+# GUIDED 下打临时航点（目标位置读回 MSP WP 254，需先切 POSHOLD+GCS NAV）
 echo 'REPOSITION 30.0005 120.0005 25' | nc 127.0.0.1 6901
 # AUX 通道 override：无打杆解锁/模式切换（通道号按 Modes 页绑定改）
 echo 'OVERRIDE_ONE 6 2000' | nc 127.0.0.1 6901   # CH6 打高
@@ -89,12 +94,12 @@ echo 'CMDINT 192 0 -1 0 0 0 300005000 1200005000 25' | nc 127.0.0.1 6901
 echo 'CMDLONG 400 1 0 0 0 0 0 0' | nc 127.0.0.1 6901  # ARM（INAV 未实现则回 UNSUPPORTED）
 ```
 
-注意（INAV 9.1/10.0-RC2 实测语义，见 `src/main/telemetry/mavlink.c`）：
+注意（INAV 10.0.0 SITL 实测语义）：
 
-- `DO_REPOSITION` 只接受 `MAV_FRAME_GLOBAL(0)`，且需 GCS NAV 有效，否则回 `DENIED`；
-  航点写入 Index 255。
-- `RC_CHANNELS_OVERRIDE` 中 0 / 65535 表示该通道忽略；INAV 不校验 target_system。
-- `COMMAND_LONG ARM(400)` INAV 未实现，会回 `UNSUPPORTED`——解锁请走 RC override 的 ARM 开关。
+- 本桥 `REPOSITION` 默认发送 `MAV_FRAME_GLOBAL(0)`；需已解锁、位置估计可信、GPS 原点有效，并处于有效 GCS NAV 的 3D POSHOLD。接受时回 `COMMAND_ACK=ACCEPTED`，更新导航目标。
+- `MSP_WP(118)` 的 254 读回 GCS 目标位置，255 读回当前实际位置；不能用 WP255 判断目标是否写入。
+- `RC_CHANNELS_OVERRIDE` 中 0 / 65535 表示该通道忽略；`COMMAND_LONG ARM(400)` 未实现，解锁请走 RC override 的 ARM 开关。
+- SITL 的串口 TCP 实现存在重连风险：桥断开可能触发未屏蔽的 `SIGPIPE`，部分情况下重连后 MAVLink 下行停流；遇到此状态需重启 SITL。
 
 ## 命令行参数
 
@@ -129,9 +134,8 @@ scripts/duo.sh  双机编队启动示例
 
 ## 验证记录
 
-- `bridge_selftest`：crc_extra（10 条消息）/ 组帧往返 / 坏 CRC 丢弃 / 零截断解码 /
-  悬停±1m / 爬升 / 触地钳位 / 姿态响应 / 控制面解析 / 多实例配置——全过。
-- 跨实现校验（pymavlink）：我方 HEARTBEAT 可被标准库解析；伪 SITL 发 HEARTBEAT+
-  GPI+GPS+VFR 后状态行 `GUIDED/YES/16星/51%/CONNECTED`；控制面下发的
-  COMMAND_INT(192)/OVERRIDE 可被 pymavlink 正确解出字段。
-- 未覆盖：真实 INAV SITL 联调（待用户环境验证，重点看 EKF 是否收敛、模式切换链路）。
+- `just test`：MAVLink 编解码、FDM 悬停/爬升/触地、陀螺耦合方向、姿态符号与航向保持、控制面解析和多实例配置——全过。
+- 跨实现校验（pymavlink）：我方 HEARTBEAT 可被标准库解析；伪 SITL 发 HEARTBEAT+GPI+GPS+VFR 后状态行 `GUIDED/YES/16星/51%/CONNECTED`；控制面下发的 COMMAND_INT(192)/OVERRIDE 可被 pymavlink 正确解出字段。
+- 隔离 EEPROM 副本静态联调：重力补偿后 `accZ=0`、`epv≈100`。进入 POSHOLD 后，高度超出目标时观察到 `corr=-219`、推力目标 `1081`，修正方向为减小推力；短测 FDM 仍上升至约 20 m，未证明高度最终收敛或稳定悬停。
+- 隔离 EEPROM 副本 GUIDED 联调：`DO_REPOSITION` 收到 `COMMAND_ACK=ACCEPTED`；MSP 254 读回目标 `30.00049992, 120.00049992, 25 m`，MSP 255 仍为实际位置 `30.0, 120.0, 10 m`。水平位置不移动符合当前 SITL X-Plane 输出缺少姿态差动的限制；双实例连接及 QGC UDP 转发已验证。
+- 原始 `inav_sitl/eeprom` 与用户固件均未修改。

@@ -58,7 +58,11 @@ int main(int argc, char** argv) {
     };
     handlers.override = [&](const uint16_t ch[18]) {
         mav.send_rc_override(ch);
-        return "OK OVERRIDE sent";
+        return "OK OVERRIDE sent (held @50Hz)";
+    };
+    handlers.clear = [&]() {
+        mav.clear_rc_override();
+        return "OK OVERRIDE cleared";
     };
     handlers.cmdint = [&](uint16_t cmd, uint8_t frame, float p1, float p2, float p3, float p4,
                           int32_t x, int32_t y, float z) {
@@ -113,7 +117,9 @@ int main(int argc, char** argv) {
             const char* armed = t.has_heartbeat ? (t.armed ? "YES" : "NO") : "--";
             double alt = t.has_gpi ? t.rel_alt_mm / 1000.0 : (s.alt_m - cfg.arm_alt_m);
             int sats = t.has_gps_raw ? t.sats : -1;
-            int thr = t.has_vfr ? t.throttle : static_cast<int>(fdm.avg_throttle() * 100);
+            // INAV 用 i16 打包 u16 油门：未解锁/无 RC 时为负（回绕成 65xxx），显示钳位
+            int thr_raw = t.has_vfr ? static_cast<int16_t>(t.throttle) : static_cast<int>(fdm.avg_throttle() * 100);
+            int thr = thr_raw < 0 ? 0 : (thr_raw > 100 ? 100 : thr_raw);
             const char* mavst = mav.connected() ? "CONNECTED" : "WAIT";
             const char* xpst = xp.connected() ? "CONNECTED" : "WAIT";
             char satsbuf[16];
@@ -123,6 +129,17 @@ int main(int argc, char** argv) {
                 std::snprintf(satsbuf, sizeof(satsbuf), "%d", sats);
             std::printf("[UAV %u] Mode: %s | Armed: %s | Alt: %.1fm | Sats: %s | Throttle: %d%% | XP: %s | MAVLink: %s\n",
                         cfg.sys_id, mode, armed, alt, satsbuf, thr, xpst, mavst);
+            if (cfg.verbose && t.has_rc) {
+                std::printf("  RC回读: %u %u %u %u %u %u %u %u\n", t.rc_ch[0], t.rc_ch[1], t.rc_ch[2],
+                            t.rc_ch[3], t.rc_ch[4], t.rc_ch[5], t.rc_ch[6], t.rc_ch[7]);
+            }
+            if (cfg.verbose) {
+                std::printf("  FDM: mot=%.2f %.2f %.2f %.2f alt=%.1f agl=%.1f vn=%.1f ve=%.1f vd=%.1f\n",
+                            motors[0], motors[1], motors[2], motors[3], fdm.state().alt_m,
+                            s.agl_m, fdm.state().vn, fdm.state().ve, fdm.state().vd);
+                std::printf("  POS: lat=%.7f lon=%.7f fc=%d,%d\n", fdm.state().lat_deg,
+                            fdm.state().lon_deg, t.lat_e7, t.lon_e7);
+            }
             std::fflush(stdout);
         }
     }

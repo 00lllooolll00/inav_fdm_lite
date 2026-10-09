@@ -17,6 +17,10 @@ release:
     cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG"
     cmake --build build-release
 
+# 运行自检
+test: build
+    ./{{build_dir}}/bridge_selftest
+
 # 运行自检（Release 版）
 test-release: release
     ./build-release/bridge_selftest

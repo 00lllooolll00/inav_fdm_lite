@@ -35,8 +35,9 @@ class MavlinkLink {
                           int32_t x, int32_t y, float z);
     void send_command_long(uint16_t command, float p1, float p2, float p3, float p4, float p5,
                            float p6, float p7);
-    // ch[18]：PWM 1000..2000，0=该通道忽略
+    // ch[18]：PWM 1000..2000，0=该通道忽略；设置后以 50Hz 持续重发直到 clear
     void send_rc_override(const uint16_t ch[18]);
+    void clear_rc_override();  // 停止重发并发送一次全 0 释放帧
     void send_arm(bool arm);  // COMMAND_LONG 400（INAV 未实现则回 UNSUPPORTED，仅透传不断言）
 
   private:
@@ -60,4 +61,6 @@ class MavlinkLink {
     uint8_t seq_ = 0;
     mav::Telemetry telem_{};
     RawRxFn raw_rx_;
+    bool ovr_active_ = false;
+    uint16_t ovr_ch_[18] = {0};
 };

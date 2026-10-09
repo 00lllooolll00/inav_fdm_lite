@@ -29,6 +29,8 @@ uint8_t crc_extra(uint32_t msgid) {
             return 39;
         case kMsgGlobalPositionInt:
             return 104;
+        case kMsgRcChannelsScaled:
+            return 237;
         case kMsgRcChannels:
             return 118;
         case kMsgVfrHud:
@@ -144,7 +146,7 @@ uint16_t get_u16(const std::vector<uint8_t>& p, size_t off) {
     // v2 零截断语义：缺失尾字节视为 0，允许部分读取
     uint16_t v = 0;
     if (off < p.size()) v |= p[off];
-    if (off + 1 < p.size()) v |= static_cast<uint16_t>(p[off + 1]) << 8;
+    if (off + 1 < p.size()) v = static_cast<uint16_t>(v | (static_cast<uint16_t>(p[off + 1]) << 8));
     return v;
 }
 int16_t get_i16(const std::vector<uint8_t>& p, size_t off) { return static_cast<int16_t>(get_u16(p, off)); }
@@ -280,6 +282,21 @@ bool decode_into(uint32_t msgid, const std::vector<uint8_t>& payload, uint8_t sr
             t.has_cmd_ack = true;
             t.ack_cmd = get_u16(payload, 0);
             t.ack_result = get_u8(payload, 2);
+            return true;
+        case kMsgRcChannels:
+            if (payload.size() < 22) return false;  // 至少前 9 通道
+            t.has_rc = true;
+            for (size_t i = 0; i < 18; ++i) t.rc_ch[i] = get_u16(payload, 4 + i * 2);
+            return true;
+        case kMsgRcChannelsScaled:
+            // scaled(-10000..10000)→PWM 近似，仅当前 8 通道有意义
+            if (payload.size() < 20) return false;
+            t.has_rc = true;
+            for (size_t i = 0; i < 8; ++i) {
+                int32_t sc = get_i16(payload, 4 + i * 2);
+                int32_t pwm = 1500 + sc / 20;  // ±10000 → ±500
+                t.rc_ch[i] = static_cast<uint16_t>(pwm < 0 ? 0 : pwm);
+            }
             return true;
         default:
             return false;

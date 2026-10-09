@@ -7,10 +7,14 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 
 namespace {
-constexpr int kXitlDrefVersion = 2;  // 声明 XITL dataref 版本，对齐 INAV 期望
+// XITL 版本声明：必须 <2！=2 时 SITL 走 XITL 插件路径，不发 throttle_ratio_all（"INAV XITL sets throttle itself"），电机闭环断裂。=1 走 X-Plane 原生路径发总油门+yoke（GPS 星数/fix 用默认值 16/3D，电池固定 16.8V——对多旋翼闭环足够）。
+constexpr int kXitlDrefVersion = 1;
 
 double clamp01(double v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
@@ -54,6 +58,10 @@ bool XplaneLink::start(LogFn log) {
     if (fd_ < 0) return false;
     int one = 1;
     ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    // SITL 背靠背突发 10 包/轮，加大缓冲防 RcvbufErrors 丢包
+    int rcvbuf = 4 * 1024 * 1024, sndbuf = 1 * 1024 * 1024;
+    ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    ::setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -72,6 +80,7 @@ bool XplaneLink::start(LogFn log) {
         std::memcpy(peer_.bytes, &peer, sizeof(peer));
         peer_.len = sizeof(peer);
     }
+    load_cache();
     running_ = true;
     rx_thread_ = std::thread(&XplaneLink::rx_loop, this);
     return true;
@@ -90,6 +99,8 @@ void XplaneLink::stop() {
 
 void XplaneLink::rx_loop() {
     uint8_t buf[2048];
+    long n_rref = 0, n_dref = 0, n_other = 0;
+    auto last_rep = std::chrono::steady_clock::now();
     while (running_) {
         sockaddr_storage src{};
         socklen_t slen = sizeof(src);
@@ -108,9 +119,21 @@ void XplaneLink::rx_loop() {
         }
         connected_ = true;
         if (std::memcmp(buf, "RREF", 4) == 0) {
+            ++n_rref;
             handle_rref_request(buf, static_cast<size_t>(n));
         } else if (std::memcmp(buf, "DREF", 4) == 0) {
+            ++n_dref;
             handle_dref(buf, static_cast<size_t>(n));
+        } else {
+            ++n_other;
+        }
+        auto now = std::chrono::steady_clock::now();
+        if (log_ && now - last_rep > std::chrono::seconds(5)) {
+            char tmp[128];
+            std::snprintf(tmp, sizeof(tmp), "UDP 收包: RREF=%ld DREF=%ld OTHER=%ld", n_rref, n_dref,
+                            n_other);
+            log_(tmp);
+            last_rep = now;
         }
     }
 }
@@ -133,6 +156,7 @@ void XplaneLink::handle_rref_request(const uint8_t* buf, size_t n) {
         } else {
             dref_ids_[name] = id;
         }
+        save_cache();
     }
     if (log_) log_("RREF 注册: " + full + " id=" + std::to_string(id) + " freq=" + std::to_string(freq));
     // xitlDrefVersion：一收到注册立刻回版本号，否则 SITL 卡在 CONNECTING
@@ -150,11 +174,16 @@ void XplaneLink::handle_dref(const uint8_t* buf, size_t n) {
     if (n < 10) return;
     const float value = get_f32le(buf + 5);
     std::string full(reinterpret_cast<const char*>(buf + 9), n - 9);
-    // 去尾部空格/NUL
-    auto end = full.find_last_not_of(" \0");
-    if (end == std::string::npos) return;
-    full.resize(end + 1);
+    // 去尾部空格/NUL（注意 find_last_not_of 不接受含 \0 的 C 字符串，逐字符判断）
+    size_t end = full.size();
+    while (end > 0 && (full[end - 1] == ' ' || full[end - 1] == '\0')) --end;
+    if (end == 0) return;
+    full.resize(end);
     const std::string name = short_name(full);
+    if (log_ && name == "throttle_ratio_all") {
+        static int n = 0;
+        if (++n % 50 == 1) log_("DREF 油门: " + std::to_string(value));
+    }
     std::lock_guard<std::mutex> lk(mu_);
     if (name == "throttle_ratio_all") {
         thr_all_ = clamp01(value);
@@ -205,9 +234,10 @@ void XplaneLink::send_sensors(const SensorSnapshot& s) {
     emit("theta", -s.theta_deg);  // fl2sitl 锚点：INAV 侧 pitch 取反，此处预反
     emit("psi", s.psi_deg);
     emit("hpath", s.hpath_deg);
-    emit("g_axil", s.g_axil);
-    emit("g_side", s.g_side);
-    emit("g_nrml", s.g_nrml);
+    // SITL 固定重力补偿为 +981 cm/s^2；该映射按静止读数匹配，动态符号仍需真实 SITL 飞行验证。
+    emit("g_axil", -s.g_axil);
+    emit("g_side", -s.g_side);
+    emit("g_nrml", 2.0f - s.g_nrml);
     emit("P", s.gyro_p_dps);
     emit("Q", s.gyro_q_dps);
     emit("R", s.gyro_r_dps);
@@ -242,4 +272,35 @@ bool XplaneLink::get_motors(std::array<double, 4>& out) const {
 std::map<std::string, uint32_t> XplaneLink::dref_map() const {
     std::lock_guard<std::mutex> lk(mu_);
     return dref_ids_;
+}
+
+std::string XplaneLink::cache_path() const {
+    char tmp[128];
+    std::snprintf(tmp, sizeof(tmp), "/tmp/inav_bridge_dref_%u.cache", listen_port_);
+    return tmp;
+}
+
+void XplaneLink::save_cache() {
+    // 持锁调用。SITL 只在启动时发一次注册，桥重启后靠缓存恢复回包能力。
+    std::ofstream f(cache_path(), std::ios::trunc);
+    if (!f) return;
+    for (const auto& kv : dref_ids_) f << kv.first << ' ' << kv.second << '\n';
+}
+
+void XplaneLink::load_cache() {
+    std::ifstream f(cache_path());
+    if (!f) return;
+    std::map<std::string, uint32_t> m;
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream iss(line);
+        std::string name;
+        uint32_t id;
+        if (iss >> name >> id) m[name] = id;
+    }
+    if (!m.empty()) {
+        std::lock_guard<std::mutex> lk(mu_);
+        dref_ids_ = std::move(m);
+        if (log_) log_("DREF 注册表从缓存恢复 " + std::to_string(dref_ids_.size()) + " 项");
+    }
 }

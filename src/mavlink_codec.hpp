@@ -15,6 +15,7 @@ constexpr uint32_t kMsgHeartbeat = 0;
 constexpr uint32_t kMsgGpsRawInt = 24;
 constexpr uint32_t kMsgAttitude = 30;
 constexpr uint32_t kMsgGlobalPositionInt = 33;
+constexpr uint32_t kMsgRcChannelsScaled = 34;
 constexpr uint32_t kMsgRcChannels = 65;
 constexpr uint32_t kMsgVfrHud = 74;
 constexpr uint32_t kMsgCommandInt = 75;
@@ -66,6 +67,9 @@ struct Telemetry {
     bool has_cmd_ack = false;
     uint16_t ack_cmd = 0;
     uint8_t ack_result = 255;
+
+    bool has_rc = false;
+    uint16_t rc_ch[18] = {0};  // RC_CHANNELS 回读（飞控视角的通道值）
 
     uint8_t fc_sysid = 0;  // 对端飞控 sysid
 };

@@ -46,6 +46,9 @@ class XplaneLink {
     void rx_loop();
     void handle_rref_request(const uint8_t* buf, size_t n);
     void handle_dref(const uint8_t* buf, size_t n);
+    void save_cache();   // 持锁调用
+    void load_cache();   // 启动时调用
+    std::string cache_path() const;
 
     uint16_t listen_port_;
     std::string sitl_ip_;

@@ -23,7 +23,7 @@ struct SensorSnapshot {
     float alt_m = 0;          // elevation（AMSL 米）
     float agl_m = 0;          // y_agl（离地米）
     float local_vx = 0;       // X-Plane 本地系：东（米/秒）
-    float local_vy = 0;       // X-Plane 本地系：地（米/秒，向上为负）
+    float local_vy = 0;       // X-Plane 本地系：上为正（米/秒）
     float local_vz = 0;       // X-Plane 本地系：南（米/秒）
     float groundspeed = 0;    // 地速（米/秒）
     float airspeed = 0;       // 空速（多旋翼≈地速+垂直分量）
@@ -39,16 +39,16 @@ struct SensorSnapshot {
     float gyro_r_dps = 0;     // R（度/秒）
     float baro_inhg = 29.92f;
     float mag_x = 1, mag_y = 0, mag_z = 0;  // 机体归一化地磁
-    // XITL 扩展
+    // XITL 扩展（fix_type 用 INAV 内部枚举：0=无，1=2D，2=3D；不是 MAVLink 枚举！）
     int num_sats = 16;
-    int fix_type = 3;
+    int fix_type = 2;
     int32_t rangefinder_cm = -1;
     float batt_v = 16.8f, batt_a = 0;
     uint16_t rssi = 90;
     bool failsafe = false;
 };
 
-// 轻量四旋翼 X 构型 6DOF（JSBSim Headless 思路：刚体积分 + 气动简化）。
+// 轻量四旋翼 Newton-Euler 刚体模型（不含完整气动、旋翼动态或地面起落架模型）。
 class QuadFdm {
   public:
     QuadFdm(double mass_kg, double max_thrust_n, double ground_alt_m);
@@ -66,6 +66,7 @@ class QuadFdm {
     double mass_ = 1.2;
     double max_thrust_ = 30.0;
     double ground_alt_ = 10.0;
+    std::array<double, 4> q_body_to_ned_{1, 0, 0, 0};
     double avg_thr_ = 0;
     // 转动惯量（kg·m²，典型 5 寸机放大值，手感稳）
     double ixx_ = 0.02, iyy_ = 0.02, izz_ = 0.04;

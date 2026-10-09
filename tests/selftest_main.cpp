@@ -133,7 +133,16 @@ void test_fdm_hover() {
     CHECK(std::fabs(s.alt_m - 10.0) < 1.0, "hover alt");
     CHECK(std::fabs(s.g_nrml - 1.0) < 0.15, "hover load");
     CHECK(std::fabs(s.g_axil) < 0.05 && std::fabs(s.g_side) < 0.05, "hover level");
-    CHECK(s.fix_type == 3 && s.num_sats == 16, "gps default");
+    CHECK(s.fix_type == 2 && s.num_sats == 16, "gps default");
+}
+
+void test_fdm_gyroscopic_coupling() {
+    QuadFdm fdm(1.2, 30.0, 10.0);
+    fdm.reset(30.0, 120.0, 100.0);
+    const std::array<double, 4> motors{0.292, 0.692, 0.292, 0.292};
+    fdm.step(motors, 0.1);
+    const SensorSnapshot s = fdm.step(motors, 0.1);
+    CHECK(s.gyro_q_dps - s.gyro_p_dps > 1.0, "rigid-body roll/pitch gyroscopic coupling direction");
 }
 
 void test_fdm_climb_and_ground() {
@@ -143,22 +152,29 @@ void test_fdm_climb_and_ground() {
     SensorSnapshot s;
     for (int i = 0; i < 50; ++i) s = fdm.step(full, 0.02);  // 1 秒全油门
     CHECK(s.alt_m > 11.0, "climb");
+    CHECK(s.local_vy > 0.0f, "climb velocity X-Plane sign");
     // 断油下坠，最终贴地不穿地
     std::array<double, 4> zero{0, 0, 0, 0};
-    for (int i = 0; i < 500; ++i) s = fdm.step(zero, 0.02);
+    for (int i = 0; i < 100; ++i) s = fdm.step(zero, 0.02);
+    CHECK(s.local_vy < 0.0f, "descent velocity X-Plane sign");
+    for (int i = 0; i < 400; ++i) s = fdm.step(zero, 0.02);
     CHECK(std::fabs(s.alt_m - 10.0) < 1e-6, "ground clamp");
     CHECK(s.agl_m == 0, "agl zero");
+    CHECK(std::fabs(s.g_nrml - 1.0) < 0.05, "ground load 1g");
 }
 
 void test_fdm_attitude_response() {
     QuadFdm fdm(1.2, 30.0, 10.0);
     fdm.reset(30.0, 120.0, 10.0, 90.0);
-    // 右侧电机大 → 应向左滚转（roll 减小为负为左压？本约定右压为正，故左侧升力大→右滚为正）
+    // 右侧电机升力较大时左滚，roll 和 P 角速度应为负。
     std::array<double, 4> m{0.6, 0.4, 0.4, 0.6};
     SensorSnapshot s;
-    for (int i = 0; i < 50; ++i) s = fdm.step(m, 0.02);
-    CHECK(std::fabs(s.phi_deg) > 0.5, "roll response");
-    CHECK(std::fabs(s.gyro_p_dps) > 1.0, "gyro response");
+    for (int i = 0; i < 10; ++i) s = fdm.step(m, 0.02);
+    CHECK(s.phi_deg < -0.5, "right-side lift rolls left");
+    CHECK(s.gyro_p_dps < -1.0, "left roll gyro sign");
+    CHECK(std::fabs(s.psi_deg - 90.0) < 1e-6, "yaw remains at initial heading");
+    const double mag_norm = std::sqrt(s.mag_x * s.mag_x + s.mag_y * s.mag_y + s.mag_z * s.mag_z);
+    CHECK(std::fabs(mag_norm - 1.0) < 1e-6, "quaternion rotation remains normalized");
 }
 
 // --- 控制面 ---
@@ -175,10 +191,14 @@ void test_ctl_parse() {
         return "OK";
     };
     uint16_t got[18] = {0};
-    bool ovr_called = false;
+    bool ovr_called = false, clear_called = false;
     h.override = [&](const uint16_t ch[18]) {
         std::memcpy(got, ch, sizeof(got));
         ovr_called = true;
+        return "OK";
+    };
+    h.clear = [&]() {
+        clear_called = true;
         return "OK";
     };
     CHECK(CtlServer::handle_line("REPOSITION 30.1 120.1 25", h) == "OK", "ctl repos");
@@ -187,7 +207,7 @@ void test_ctl_parse() {
     CHECK(CtlServer::handle_line("OVERRIDE_ONE 6 2000", h) == "OK", "ctl ovr1");
     CHECK(ovr_called && got[5] == 2000 && got[0] == 0, "ctl ovr1 vals");
     CHECK(CtlServer::handle_line("OVERRIDE_CLEAR", h) == "OK", "ctl clear");
-    CHECK(got[5] == 0, "ctl clear vals");
+    CHECK(clear_called, "ctl clear called");
     CHECK(CtlServer::handle_line("BOGUS", h).substr(0, 3) == "ERR", "ctl unknown");
 }
 
@@ -223,6 +243,7 @@ int main() {
     test_gpi_decode();
     test_cmd_pack();
     test_fdm_hover();
+    test_fdm_gyroscopic_coupling();
     test_fdm_climb_and_ground();
     test_fdm_attitude_response();
     test_ctl_parse();

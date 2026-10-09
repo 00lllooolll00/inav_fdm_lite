@@ -16,6 +16,35 @@ float alt_to_inhg(double alt_m) {
     double p = p0 * std::pow(1.0 - alt_m / k, 5.255);
     return static_cast<float>(0.0295299837 * p);
 }
+
+std::array<double, 4> euler_to_quaternion(double roll_deg, double pitch_deg, double yaw_deg) {
+    const double r = roll_deg * kPi / 360.0, p = pitch_deg * kPi / 360.0, y = yaw_deg * kPi / 360.0;
+    const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
+    const double cy = std::cos(y), sy = std::sin(y);
+    return {cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy};
+}
+
+void normalize_quaternion(std::array<double, 4>& q) {
+    const double norm = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (double& value : q) value /= norm;
+}
+
+std::array<double, 9> body_to_ned(const std::array<double, 4>& q) {
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    return {1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+            2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+            2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)};
+}
+
+std::array<double, 3> quaternion_to_euler(const std::array<double, 4>& q) {
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double roll = std::atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
+    const double sin_pitch = clamp(2 * (w * y - z * x), -1, 1);
+    const double pitch = std::asin(sin_pitch);
+    const double yaw = std::atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+    return {roll * 180.0 / kPi, pitch * 180.0 / kPi, yaw * 180.0 / kPi};
+}
 }  // namespace
 
 QuadFdm::QuadFdm(double mass_kg, double max_thrust_n, double ground_alt_m)
@@ -27,6 +56,7 @@ void QuadFdm::reset(double lat, double lon, double alt, double yaw_deg) {
     st_.lon_deg = lon;
     st_.alt_m = alt;
     st_.yaw_deg = yaw_deg;
+    q_body_to_ned_ = euler_to_quaternion(0, 0, yaw_deg);
     avg_thr_ = 0;
 }
 
@@ -43,14 +73,10 @@ SensorSnapshot QuadFdm::step(const std::array<double, 4>& motors, double dt) {
     const double tau_y = (t0 + t1 - t2 - t3) * arm_m_ * 0.7071;  // 俯仰
     const double tau_z = (-t0 + t1 - t2 + t3) * yaw_k_ * arm_m_ * 10.0;
 
-    // 2) 姿态 → 旋转矩阵（body→world NED，ZYX）
-    const double r = st_.roll_deg * kPi / 180.0, p = st_.pitch_deg * kPi / 180.0;
-    const double y = st_.yaw_deg * kPi / 180.0;
-    const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
-    const double cy = std::cos(y), sy = std::sin(y);
-    const double r11 = cy * cp, r12 = cy * sp * sr - sy * cr, r13 = cy * sp * cr + sy * sr;
-    const double r21 = sy * cp, r22 = sy * sp * sr + cy * cr, r23 = sy * sp * cr - cy * sr;
-    const double r31 = -sp, r32 = cp * sr, r33 = cp * cr;
+    const auto rot = body_to_ned(q_body_to_ned_);
+    const double r11 = rot[0], r12 = rot[1], r13 = rot[2];
+    const double r21 = rot[3], r22 = rot[4], r23 = rot[5];
+    const double r31 = rot[6], r32 = rot[7], r33 = rot[8];
     // 机体推力轴 (0,0,-thrust) 转到 NED：
     const double t_n = r13 * -thrust;
     const double t_e = r23 * -thrust;
@@ -77,40 +103,40 @@ SensorSnapshot QuadFdm::step(const std::array<double, 4>& motors, double dt) {
         st_.ve *= (1.0 - 5.0 * dt);
     }
 
-    // 4) 转动积分（一阶惯量 + 陀螺耦合 + 角阻尼）
+    // I*omega_dot = torque - omega x (I*omega)，按刚体角动量方程计算角加速度。
     const double p_rad = st_.p_dps * kPi / 180.0, q_rad = st_.q_dps * kPi / 180.0,
                  r_rad = st_.r_dps * kPi / 180.0;
-    const double gx = -((iyy_ - izz_) * q_rad * r_rad) / ixx_;
-    const double gy = -((izz_ - ixx_) * r_rad * p_rad) / iyy_;
-    const double gz = -((ixx_ - iyy_) * p_rad * q_rad) / izz_;
-    double p_new = p_rad + ((tau_x / ixx_ + gx) - 2.0 * p_rad) * dt;
-    double q_new = q_rad + ((tau_y / iyy_ + gy) - 2.0 * q_rad) * dt;
-    double r_new = r_rad + ((tau_z / izz_ + gz) - 1.0 * r_rad) * dt;
-    // 触地时姿态回正（起落架效应简化）
+    const double p_dot = (tau_x + (iyy_ - izz_) * q_rad * r_rad) / ixx_ - 2.0 * p_rad;
+    const double q_dot = (tau_y + (izz_ - ixx_) * r_rad * p_rad) / iyy_ - 2.0 * q_rad;
+    const double r_dot = (tau_z + (ixx_ - iyy_) * p_rad * q_rad) / izz_ - r_rad;
+    double p_new = p_rad + p_dot * dt;
+    double q_new = q_rad + q_dot * dt;
+    double r_new = r_rad + r_dot * dt;
     if (agl <= 0.01 && thrust < mass_ * kG * 1.05) {
         const double k = clamp(8.0 * dt, 0, 1);
-        st_.roll_deg *= (1 - k);
-        st_.pitch_deg *= (1 - k);
-        p_new *= (1 - k);
-        q_new *= (1 - k);
+        st_.roll_deg *= 1 - k;
+        st_.pitch_deg *= 1 - k;
+        p_new *= 1 - k;
+        q_new *= 1 - k;
+        q_body_to_ned_ = euler_to_quaternion(st_.roll_deg, st_.pitch_deg, st_.yaw_deg);
     }
     st_.p_dps = p_new * 180.0 / kPi;
     st_.q_dps = q_new * 180.0 / kPi;
     st_.r_dps = r_new * 180.0 / kPi;
 
-    // 欧拉角积分（ZYX 运动学，body 角速度投影）
-    const double tp = std::tan(p);
-    const double sec_p = 1.0 / std::max(cp, 1e-6);
-    const double rdot = (p_new + sr * tp * q_new + cr * tp * r_new) * 180.0 / kPi;
-    const double pdot_e = (cr * q_new - sr * r_new) * 180.0 / kPi;
-    const double ydot = ((sr * sec_p) * q_new + (cr * sec_p) * r_new) * 180.0 / kPi;
-    st_.roll_deg += rdot * dt;
-    st_.pitch_deg = clamp(st_.pitch_deg + pdot_e * dt, -85, 85);
-    st_.yaw_deg += ydot * dt;
-    while (st_.yaw_deg < 0) st_.yaw_deg += 360;
-    while (st_.yaw_deg >= 360) st_.yaw_deg -= 360;
-    while (st_.roll_deg < -180) st_.roll_deg += 360;
-    while (st_.roll_deg > 180) st_.roll_deg -= 360;
+    const double p_mid = 0.5 * (p_rad + p_new), q_mid = 0.5 * (q_rad + q_new);
+    const double r_mid = 0.5 * (r_rad + r_new);
+    const auto& a = q_body_to_ned_;
+    q_body_to_ned_ = {a[0] - 0.5 * dt * (a[1] * p_mid + a[2] * q_mid + a[3] * r_mid),
+                       a[1] + 0.5 * dt * (a[0] * p_mid + a[2] * r_mid - a[3] * q_mid),
+                       a[2] + 0.5 * dt * (a[0] * q_mid + a[3] * p_mid - a[1] * r_mid),
+                       a[3] + 0.5 * dt * (a[0] * r_mid + a[1] * q_mid - a[2] * p_mid)};
+    normalize_quaternion(q_body_to_ned_);
+    const auto euler = quaternion_to_euler(q_body_to_ned_);
+    st_.roll_deg = euler[0];
+    st_.pitch_deg = euler[1];
+    st_.yaw_deg = euler[2];
+    if (st_.yaw_deg < 0) st_.yaw_deg += 360.0;
 
     // 5) 自洽传感器合成
     SensorSnapshot s;
@@ -118,9 +144,10 @@ SensorSnapshot QuadFdm::step(const std::array<double, 4>& motors, double dt) {
     s.lon_deg = st_.lon_deg;
     s.alt_m = static_cast<float>(st_.alt_m);
     s.agl_m = static_cast<float>(std::max(0.0, agl));
-    // X-Plane 本地系：local_vx=东，local_vy=地（上为负），local_vz=南
+    // X-Plane 本地系：local_vx=东，local_vy=上，local_vz=南。
+    // SITL 用 gpsVelD=-local_vy，因此 NED 的 vd（下为正）需取反。
     s.local_vx = static_cast<float>(st_.ve);
-    s.local_vy = static_cast<float>(st_.vd);
+    s.local_vy = static_cast<float>(-st_.vd);
     s.local_vz = static_cast<float>(-st_.vn);
     const float gs = static_cast<float>(std::hypot(st_.vn, st_.ve));
     s.groundspeed = gs;
@@ -131,7 +158,9 @@ SensorSnapshot QuadFdm::step(const std::array<double, 4>& motors, double dt) {
     s.hpath_deg = static_cast<float>(std::atan2(st_.ve, st_.vn) * 180.0 / kPi);
     if (s.hpath_deg < 0) s.hpath_deg += 360;
     // 过载 = 比力/g（机体系）：比力 = 真实加速度 - 重力矢量(0,0,+g)
-    const double f_n = an, f_e = ae, f_d = ad - kG;
+    // 触地时位置被钳位（真实加速度≠动力学加速度），比力改用支持力模型：f_d=-g
+    const bool on_ground = (st_.alt_m <= ground_alt_ + 1e-9);
+    const double f_n = an, f_e = ae, f_d = on_ground ? -kG : ad - kG;
     const double fx = r11 * f_n + r21 * f_e + r31 * f_d;
     const double fy = r12 * f_n + r22 * f_e + r32 * f_d;
     const double fz = r13 * f_n + r23 * f_e + r33 * f_d;

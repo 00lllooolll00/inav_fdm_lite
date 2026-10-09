@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -20,19 +21,20 @@ bool set_nonblock(int fd) {
     return ::fcntl(fd, F_SETFL, f | O_NONBLOCK) == 0;
 }
 
-bool send_all(int fd, const uint8_t* p, size_t n) {
+// 返回：0=成功，1=背压丢帧（不断线），2=真错误（需重连）
+int send_all(int fd, const uint8_t* p, size_t n) {
     while (n > 0) {
         ssize_t w = ::send(fd, p, n, MSG_NOSIGNAL);
         if (w < 0) {
             if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return false;  // 背压：丢弃本帧
-            return false;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+            return 2;
         }
-        if (w == 0) return false;
+        if (w == 0) return 2;
         p += w;
         n -= static_cast<size_t>(w);
     }
-    return true;
+    return 0;
 }
 }  // namespace
 
@@ -115,12 +117,8 @@ bool MavlinkLink::try_connect() {
         ::close(fd);
         return false;
     }
-    // 恢复阻塞 + 收发超时（读循环用 select 驱动，此处超时做兜底）
-    int f = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, f & ~O_NONBLOCK);
-    timeval rtv{1, 0};
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &rtv, sizeof(rtv));
+    // 保持非阻塞：发送背压时丢帧（50Hz 冗余足），绝不阻塞 worker 节拍；
+    // 读循环用 select 驱动，无需超时兜底。
     {
         std::lock_guard<std::mutex> lk(mu_);
         if (fd_ >= 0) ::close(fd_);
@@ -156,13 +154,45 @@ void MavlinkLink::worker() {
                 continue;
             }
         }
-        // 1Hz 心跳维持
+        // 1Hz 心跳维持 + 50Hz override 保持（INAV rxSignalTimeout=100ms，必须 ≥10Hz，留余量）
         auto now = std::chrono::steady_clock::now();
         if (now - last_hb > std::chrono::seconds(1)) {
             send_frame(mav::kMsgHeartbeat, mav::pack_heartbeat_gcs());
             last_hb = now;
         }
-        // 读（select 200ms 超时，兼顾退出响应）
+        // 50Hz override 保持
+        {
+            bool active = false;
+            uint16_t ch[18] = {0};
+            uint8_t tgt = 0;
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                active = ovr_active_;
+                if (active) {
+                    std::memcpy(ch, ovr_ch_, sizeof(ch));
+                    tgt = telem_.fc_sysid != 0 ? telem_.fc_sysid : gcs_sysid_;
+                }
+            }
+            static auto last_ovr = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+            if (active && now - last_ovr > std::chrono::milliseconds(20)) {
+                last_ovr = now;
+                send_frame(mav::kMsgRcChannelsOverride, mav::pack_rc_override(tgt, ch));
+                static int ovr_count = 0;
+                static auto ovr_win = std::chrono::steady_clock::now();
+                if (++ovr_count >= 50) {
+                    auto dt = std::chrono::steady_clock::now() - ovr_win;
+                    if (log_) {
+                        char buf[96];
+                        std::snprintf(buf, sizeof(buf), "OVR 实际帧率: %.1f Hz",
+                                        50.0 / std::chrono::duration<double>(dt).count());
+                        log_(buf);
+                    }
+                    ovr_count = 0;
+                    ovr_win = std::chrono::steady_clock::now();
+                }
+            }
+        }
+        // 读（select 20ms 超时：发送节拍 50Hz，不能被读阻塞拖慢）
         int fd;
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -171,7 +201,7 @@ void MavlinkLink::worker() {
         fd_set rf;
         FD_ZERO(&rf);
         FD_SET(fd, &rf);
-        timeval tv{0, 200000};
+        timeval tv{0, 20000};
         int rc = ::select(fd + 1, &rf, nullptr, nullptr, &tv);
         if (rc < 0) {
             if (errno == EINTR) continue;
@@ -215,8 +245,8 @@ void MavlinkLink::send_frame(uint32_t msgid, const std::vector<uint8_t>& payload
     std::lock_guard<std::mutex> lk(mu_);
     if (!connected_ || fd_ < 0) return;
     auto frame = mav::frame_v2(gcs_sysid_, kGcsCompId, seq_++, msgid, payload.data(), payload.size());
-    if (!send_all(fd_, frame.data(), frame.size())) {
-        // 发送失败：标记断线，worker 负责重连
+    if (send_all(fd_, frame.data(), frame.size()) == 2) {
+        // 真错误：标记断线，worker 负责重连（背压丢帧不重连）
         ::shutdown(fd_, SHUT_RDWR);
         ::close(fd_);
         fd_ = -1;
@@ -258,9 +288,29 @@ void MavlinkLink::send_rc_override(const uint16_t ch[18]) {
     uint8_t tgt;
     {
         std::lock_guard<std::mutex> lk(mu_);
+        std::memcpy(ovr_ch_, ch, sizeof(ovr_ch_));
+        ovr_active_ = true;
         tgt = telem_.fc_sysid != 0 ? telem_.fc_sysid : gcs_sysid_;
     }
+    if (log_) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "OVR 发 ch1..8=%u %u %u %u %u %u %u %u tgt=%u", ch[0],
+                        ch[1], ch[2], ch[3], ch[4], ch[5], ch[6], ch[7], tgt);
+        log_(buf);
+    }
     send_frame(mav::kMsgRcChannelsOverride, mav::pack_rc_override(tgt, ch));
+}
+
+void MavlinkLink::clear_rc_override() {
+    uint8_t tgt;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        ovr_active_ = false;
+        std::memset(ovr_ch_, 0, sizeof(ovr_ch_));
+        tgt = telem_.fc_sysid != 0 ? telem_.fc_sysid : gcs_sysid_;
+    }
+    uint16_t zero[18] = {0};
+    send_frame(mav::kMsgRcChannelsOverride, mav::pack_rc_override(tgt, zero));
 }
 
 void MavlinkLink::send_arm(bool arm) {

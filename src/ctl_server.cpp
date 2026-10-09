@@ -147,9 +147,8 @@ std::string CtlServer::handle_line(const std::string& line, const Handlers& h) {
         return h.override(ch);
     }
     if (cmd == "OVERRIDE_CLEAR") {
-        uint16_t ch[18] = {0};
-        if (!h.override) return "ERR no handler";
-        return h.override(ch);
+        if (!h.clear) return "ERR no handler";
+        return h.clear();
     }
     if (cmd == "CMDLONG") {
         if (t.size() != 9) return "ERR CMDLONG <cmd> <p1..p7>";

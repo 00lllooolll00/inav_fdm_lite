@@ -20,6 +20,7 @@ class CtlServer {
     struct Handlers {
         std::function<std::string(double, double, float, uint8_t)> reposition;
         std::function<std::string(const uint16_t[18])> override;
+        std::function<std::string()> clear;
         std::function<std::string(uint16_t, uint8_t, float, float, float, float, int32_t, int32_t, float)>
             cmdint;
         std::function<std::string(uint16_t, float, float, float, float, float, float, float)> cmdlong;
