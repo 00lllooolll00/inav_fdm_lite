@@ -1,0 +1,10 @@
+build/
+*.o
+*.a
+*.so
+compile_commands.json
+.cache/
+sitl_run/
+eeprom.bin
+uav*.bin
+/tmp/
