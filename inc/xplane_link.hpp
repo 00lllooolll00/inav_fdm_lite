@@ -21,33 +21,37 @@
 //     典型配法 4 路电机同值时即总油门）；
 //   - yoke_roll/pitch/yaw_ratio：姿态控制量 -1..1；
 //   - 本桥按“总油门 + 姿态差动”重构 4 路电机，还原 X 构型混控。
-class XplaneLink {
-  public:
-    using LogFn = std::function<void(const std::string&)>;
+class XplaneLink
+{
+public:
+    using LogFn = std::function<void(const std::string &)>;
 
-    XplaneLink(uint16_t listen_port, const std::string& sitl_ip, uint16_t simport);
+    XplaneLink(uint16_t listen_port, const std::string &sitl_ip, uint16_t simport);
     ~XplaneLink();
 
-    XplaneLink(const XplaneLink&) = delete;
-    XplaneLink& operator=(const XplaneLink&) = delete;
+    XplaneLink(const XplaneLink &) = delete;
+    XplaneLink &operator=(const XplaneLink &) = delete;
 
     bool start(LogFn log = nullptr);
     void stop();
 
-    // 发送一帧传感器数据（50Hz 主循环调用）；未建联时静默丢弃。
-    void send_sensors(const SensorSnapshot& s);
+    // 发送一帧传感器数据（由主循环按 -r 调用）；未建联时静默丢弃。
+    void send_sensors(const SensorSnapshot &s);
     // 取最新电机油门（0..1）；返回 false 表示从未收到过电机包。
-    bool get_motors(std::array<double, 4>& out) const;
-    bool connected() const { return connected_.load(); }
+    bool get_motors(std::array<double, 4> &out) const;
+    bool connected() const
+    {
+        return connected_.load();
+    }
     // 已注册 dref 名 → id（供自检）。
     std::map<std::string, uint32_t> dref_map() const;
 
-  private:
+private:
     void rx_loop();
-    void handle_rref_request(const uint8_t* buf, size_t n);
-    void handle_dref(const uint8_t* buf, size_t n);
-    void save_cache();   // 持锁调用
-    void load_cache();   // 启动时调用
+    void handle_rref_request(const uint8_t *buf, size_t n);
+    void handle_dref(const uint8_t *buf, size_t n);
+    void save_cache(); // 持锁调用
+    void load_cache(); // 启动时调用
     std::string cache_path() const;
 
     uint16_t listen_port_;
@@ -57,19 +61,20 @@ class XplaneLink {
 
     int fd_ = -1;
     std::thread rx_thread_;
-    std::atomic<bool> running_{false};
-    std::atomic<bool> connected_{false};
+    std::atomic<bool> running_{ false };
+    std::atomic<bool> connected_{ false };
 
     mutable std::mutex mu_;
-    std::map<std::string, uint32_t> dref_ids_;  // 短名 → RREF id
+    std::map<std::string, uint32_t> dref_ids_; // 短名 → RREF id
     // 对端地址（从首个 RREF/DREF 包学习；sendto 回包用）
-    struct SockAddr {
-        uint8_t bytes[32] = {0};
+    struct SockAddr
+    {
+        uint8_t bytes[32] = { 0 };
         uint32_t len = 0;
     };
     SockAddr peer_{};
     // 电机状态
-    std::array<double, 4> motors_{0, 0, 0, 0};
+    std::array<double, 4> motors_{ 0, 0, 0, 0 };
     bool motors_valid_ = false;
     double thr_all_ = 0, yoke_r_ = 0, yoke_p_ = 0, yoke_y_ = 0;
 };
