@@ -18,23 +18,18 @@ add_executable(inav_sitl_bridge
   src/config.cpp
   src/fdm.cpp
   src/xplane_link.cpp
-  src/mavlink_link.cpp
-  src/mavlink_codec.cpp
-  src/ctl_server.cpp
 )
-target_include_directories(inav_sitl_bridge PRIVATE src)
+target_include_directories(inav_sitl_bridge PRIVATE inc)
 target_link_libraries(inav_sitl_bridge PRIVATE pthread)
 
-# 自检：MAVLink 编解码 + FDM 数学 + 配置解析 + 控制面解析
+# 自检：FDM 数学 + 配置解析
 add_executable(bridge_selftest
   tests/selftest_main.cpp
   src/config.cpp
   src/fdm.cpp
-  src/mavlink_codec.cpp
   src/xplane_link.cpp
-  src/ctl_server.cpp
 )
-target_include_directories(bridge_selftest PRIVATE src)
+target_include_directories(bridge_selftest PRIVATE inc)
 target_link_libraries(bridge_selftest PRIVATE pthread)
 
 enable_testing()

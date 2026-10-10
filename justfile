@@ -30,10 +30,14 @@ ctest: build
     ctest --test-dir {{build_dir}} --output-on-failure
 
 # 启动单实例桥接（参数示例，端口按需改）
-run id="1" lat="30.0" lon="120.0" alt="10.0" simport="49000" mav="5762": build
+run id="1" lat="30.0" lon="120.0" alt="10.0" simport="49000": build
     ./{{build_dir}}/inav_sitl_bridge --id {{id}} --lat {{lat}} --lon {{lon}} --alt {{alt}} \
-        -p {{simport}} -l {{simport}} --mav-tcp-port {{mav}} -r 50
+        -p {{simport}} -l {{simport}} -r 500
 
 # 清理构建目录
 clean:
     rm -rf {{build_dir}} build-release
+
+# 格式化
+format:
+    fd -e cpp -e hpp src tests/ -X clang-format -i
