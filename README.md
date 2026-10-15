@@ -42,7 +42,7 @@ just clean   # 清理构建目录
 另一个终端启动桥接：
 
 ```bash
-./build/inav_sitl_bridge --id 1 --lat 30.0 --lon 120.0 --alt 10.0 \
+./build/inav_sitl_bridge --id 1 --lat 30.6570 --lon 104.0660 --alt 10.0 \
   -p 49000 -l 49000 -r 500
 ```
 
@@ -69,7 +69,7 @@ just clean   # 清理构建目录
 | `-p` | `49000` | SITL 的 X-Plane UDP 端口 |
 | `-l` | 与 `-p` 相同 | 本地 UDP 监听端口 |
 | `-r` | `500` | FDM 与传感器注入频率（Hz） |
-| `--lat` / `--lon` / `--alt` | `30` / `120` / `10` | 初始纬度、经度和 AMSL 高度 |
+| `--lat` / `--lon` / `--alt` | `30.6570` / `104.0660` / `10` | 初始纬度、经度和 AMSL 高度 |
 | `--id` | `1` | 日志实例编号 |
 | `--mass` | `1.2` | 机体质量（kg） |
 | `--max-thrust` | `30` | 全油门总推力（N） |

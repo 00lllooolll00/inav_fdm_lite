@@ -17,8 +17,8 @@ void print_usage(const char *prog)
                 "    -r <hz>                 物理推演与注入刷新率（默认 500）\n"
                 "\n"
                 "  实例与地理:\n"
-                "    --lat <deg>             初始纬度（默认 30.0）\n"
-                "    --lon <deg>             初始经度（默认 120.0）\n"
+                "    --lat <deg>             初始纬度（默认 30.6570）\n"
+                "    --lon <deg>             初始经度（默认 104.0660）\n"
                 "    --alt <m>               初始海拔 AMSL（默认 10.0）\n"
                 "    --id <num>              日志实例编号（默认 1）\n"
                 "\n"
@@ -31,7 +31,7 @@ void print_usage(const char *prog)
                 "\n"
                 "示例:\n"
                 "  SITL 端: inav_SITL --sim=xp --simip=127.0.0.1 --simport=49000 --path ./uav1.bin\n"
-                "  桥接端: %s --id 1 --lat 30.0 --lon 120.0 --alt 10.0 -p 49000 -r 500\n",
+                "  桥接端: %s --id 1 --lat 30.6570 --lon 104.0660 --alt 10.0 -p 49000 -r 500\n",
                 prog,
                 prog);
 }

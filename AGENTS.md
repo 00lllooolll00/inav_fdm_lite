@@ -34,7 +34,7 @@ SITL 到桥：
 - `inc/`：公共头文件，当前为 `config.hpp`、`fdm.hpp`、`xplane_link.hpp`。
 - `src/`：生产实现；入口、参数解析、FDM 和 X-Plane UDP 链路。
 - `tests/`：自写断言式单元自检。
-- `scripts/`：`duo.sh` 双实例 SITL + bridge 演示脚本。
+- `scripts/`：`duo.sh` 双实例 SITL + bridge 演示脚本；`sitl_air.py` 前台常驻联调（每组 `<串口>=<eeprom>[@lat,lon]` 一套 SITL+FDM+串口桥，可多组，日志带组号，Ctrl-C 退出）。
 - `inav_sitl/`：用户提供的 SITL 二进制和 EEPROM；运行测试时使用工作副本，避免修改基线。
 - `build/`、`build-release/`：CMake/Ninja 生成物，已被 `.gitignore` 忽略。
 

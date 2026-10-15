@@ -13,8 +13,8 @@ struct BridgeConfig
     double rate_hz = 500.0; // -r：物理推演与注入刷新率
 
     // --- 实例与地理 ---
-    double init_lat = 30.0; // --lat
-    double init_lon = 120.0; // --lon
+    double init_lat = 30.6570; // --lat（默认成都天府广场）
+    double init_lon = 104.0660; // --lon（默认成都天府广场）
     double init_alt = 10.0; // --alt（AMSL 米）
     uint8_t instance_id = 1; // --id（日志实例编号）
 

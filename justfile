@@ -30,7 +30,7 @@ ctest: build
     ctest --test-dir {{build_dir}} --output-on-failure
 
 # 启动单实例桥接（参数示例，端口按需改）
-run id="1" lat="30.0" lon="120.0" alt="10.0" simport="49000": build
+run id="1" lat="30.6570" lon="104.0660" alt="10.0" simport="49000": build
     ./{{build_dir}}/inav_sitl_bridge --id {{id}} --lat {{lat}} --lon {{lon}} --alt {{alt}} \
         -p {{simport}} -l {{simport}} -r 500
 
