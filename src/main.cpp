@@ -23,7 +23,7 @@ void on_signal(int)
     g_stop = true;
 }
 
-// 与 arm_status.py 的约定：该标志文件存在（且不太旧）时让出 MSP 口。
+// 与 临时 MSP 工具 的约定：该标志文件存在（且不太旧）时让出 MSP 口。
 // SITL 每个 UART 只服务一个客户端，桥长期占用会饿死其它工具（见 msp_link.hpp）。
 bool mspYieldRequested(uint16_t msp_port)
 {
@@ -82,6 +82,10 @@ int main(int argc, char **argv)
     std::array<double, 4> motors{ 0, 0, 0, 0 };
     MspLink msp(cfg.sitl_ip, cfg.msp_port);
     unsigned msp_tick = 0;
+    // 解锁状态监测：seen 锁存本段出现过的原因（恢复正常后清零重新计）
+    uint32_t arming_seen = 0U;
+    bool arming_first_ok = false;
+    bool armed_prev = false;
 
     while (!g_stop)
     {
@@ -97,7 +101,7 @@ int main(int argc, char **argv)
             // MSP 模式：50Hz 轮询电机真值（TCP 往返不宜每周期做），其余周期沿用上次结果。
             // X-Plane 通道只有总油门 + 舵面，多旋翼姿态差动传不出来，只能走 MSP。
             ++msp_tick;
-            if (msp_tick % 100U == 0) // 5Hz 查让位标志（arm_status.py 等工具占用时）
+            if (msp_tick % 100U == 0) // 5Hz 查让位标志（临时 MSP 工具 等工具占用时）
             {
                 const bool yield = mspYieldRequested(cfg.msp_port);
                 if (yield != msp.paused())
@@ -108,7 +112,43 @@ int main(int argc, char **argv)
                     msp.set_paused(yield);
                 }
             }
-            if (msp_tick % 10U == 0 && msp.poll_motors(m)) motors = m;
+            if (msp_tick % 10U == 0 && msp.poll_motors(m)) motors = mspMotorsToFdmOrder(m);
+            // 解锁状态：位 6 起是阻止解锁原因（CAL/RX/OVRLD/NAV…），位 2 是 ARMED。
+            // 与电机轮询错开半拍轮询同一连接，逐位锁存——瞬时原因（等 RC 帧、校准）也不会漏。
+            if (msp_tick % 10U == 5U)
+            {
+                uint32_t flags = 0;
+                if (msp.poll_status(flags))
+                {
+                    const uint32_t blocks = flags & MSP_ARMING_BLOCK_MASK;
+                    const bool armed = (flags & MSP_ARMING_ARMED) != 0U;
+                    if (armed != armed_prev)
+                    {
+                        armed_prev = armed;
+                        std::printf("[UAV %u] %s\n", cfg.instance_id, armed ? "ARMED" : "DISARMED");
+                        std::fflush(stdout);
+                    }
+                    if ((blocks & ~arming_seen) != 0U)
+                    {
+                        arming_seen |= blocks;
+                        std::printf("[UAV %u] 解锁受阻: %s\n", cfg.instance_id, mspArmingBlockNames(blocks).c_str());
+                        std::fflush(stdout);
+                    }
+                    else if (blocks == 0U && arming_seen != 0U)
+                    {
+                        std::printf("[UAV %u] 解锁条件恢复（曾受阻: %s）\n", cfg.instance_id,
+                                    mspArmingBlockNames(arming_seen).c_str());
+                        std::fflush(stdout);
+                        arming_seen = 0U;
+                    }
+                    if (blocks == 0U && !arming_first_ok)
+                    {
+                        std::printf("[UAV %u] 解锁状态: 正常\n", cfg.instance_id);
+                        std::fflush(stdout);
+                    }
+                    arming_first_ok = true;
+                }
+            }
         }
         else if (xp.get_motors(m))
         {

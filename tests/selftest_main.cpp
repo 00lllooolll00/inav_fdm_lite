@@ -133,6 +133,57 @@ void test_msp_motor_frame()
     CHECK(used == 3 + sizeof(frame), "msp consumed bytes");
 }
 
+// 电机顺序重排：INAV 序号 [右后,右前,左后,左前] → FDM [右前,左前,左后,右后]。
+// 用实测 eeprom 的 Quad X 混控表生成电机输出（已含 INAV 对 yaw 的取反），重排后喂 FDM：
+// 纯滚转/纯俯仰/纯偏航只能驱动对应轴。错序时纯滚转会变成纯俯仰——空中表现为绕圈。
+void test_msp_motor_order()
+{
+    // 每行 = INAV 电机序号 M1..M4（右后/右前/左后/左前）对三轴单位命令的响应增益
+    const double gain[4][3] = {
+        { -1, +1, +1 }, // M1 右后
+        { -1, -1, -1 }, // M2 右前
+        { +1, +1, -1 }, // M3 左后
+        { +1, -1, +1 }, // M4 左前
+    };
+    const double expect_sign[3] = { +1, -1, +1 }; // 右滚为正 / 后侧加力低头为负 / 右偏航为正
+    for (size_t axis = 0; axis < 3; ++axis)
+    {
+        std::array<double, 4> msp;
+        for (size_t i = 0; i < 4; ++i) msp[i] = 0.5 + 0.1 * gain[i][axis];
+        QuadFdm fdm(1.2, 30.0, 10.0);
+        fdm.reset(30.0, 120.0, 10.0);
+        fdm.step(mspMotorsToFdmOrder(msp), 0.02);
+        const SensorSnapshot s = fdm.step(mspMotorsToFdmOrder(msp), 0.02);
+        const double rate[3] = { s.gyro_p_dps, s.gyro_q_dps, s.gyro_r_dps };
+        CHECK(rate[axis] * expect_sign[axis] > 1.0, "msp order drives its own axis");
+        for (size_t other = 0; other < 3; ++other)
+        {
+            if (other == axis) continue;
+            CHECK(std::fabs(rate[other]) < 0.05 * std::fabs(rate[axis]), "msp order no cross-axis coupling");
+        }
+    }
+}
+
+// 解锁位图：位 6..30 是阻止原因（RX=18 在高位，MSP_STATUS_EX 的 u16 会把它丢掉），位 2 是 ARMED。
+void test_arming_flags()
+{
+    CHECK(mspArmingBlockNames(0U).empty(), "no block -> empty");
+    CHECK(mspArmingBlockNames(1U << 18) == "RX", "high block RX");
+    CHECK(mspArmingBlockNames((1U << 9) | (1U << 18)) == "CAL,RX", "block names joined");
+    CHECK((0x00040a20U & MSP_ARMING_BLOCK_MASK) == ((1U << 9) | (1U << 11) | (1U << 18)), "mask keeps 6..30");
+    CHECK((0x00000004U & MSP_ARMING_ARMED) != 0U, "armed status bit");
+
+    // MSP2_INAV_STATUS 响应：payload 里 9..12 是 armingFlags（小端）；解析必须按 cmd 过滤
+    uint8_t frame[25] = { '$', 'X', '>', 0, 0x00, 0x20, 16, 0 };
+    const uint32_t flags = 0x00040820U;
+    for (int i = 0; i < 4; ++i) frame[8 + 9 + i] = (uint8_t)((flags >> (8 * i)) & 0xFF);
+    const uint8_t *payload = nullptr;
+    size_t plen = 0;
+    CHECK(mspParseFrame(frame, sizeof(frame), 0x2000, &payload, &plen, nullptr), "status frame found");
+    CHECK(plen == 16 && payload != nullptr && payload[11] == 0x04, "arming flags high byte");
+    CHECK(!mspParseFrame(frame, sizeof(frame), 104, &payload, &plen, nullptr), "cmd filter rejects other query");
+}
+
 // --- 配置 ---
 void test_config_defaults()
 {
@@ -169,6 +220,8 @@ int main()
     test_fdm_attitude_response();
     test_fdm_horizontal_translation();
     test_msp_motor_frame();
+    test_arming_flags();
+    test_msp_motor_order();
     test_config_defaults();
     test_config_multi();
     if (g_fail == 0)

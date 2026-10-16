@@ -15,6 +15,29 @@
 // 帧未收全或不足 4 路时返回 false（调用方继续收）；consumed 非空时回写本帧字节数。
 bool mspParseMotorFrame(const uint8_t *data, size_t len, std::array<double, 4> &out, size_t *consumed);
 
+// 在字节流里找一帧指定 cmd 的 MSP v2 响应（$X> + flags + cmd(u16) + len(u16) + payload + crc）。
+// 同一连接上会话式交错着多种查询的响应，必须按 cmd 过滤，否则会把别的响应当电机包解析。
+// 返回 false 表示帧未收全或流里没有该 cmd 的帧。
+bool mspParseFrame(const uint8_t *data, size_t len, uint16_t want_cmd, const uint8_t **payload, size_t *plen,
+                   size_t *consumed);
+
+// armingFlags（MSP2_INAV_STATUS 的 32 位字段）的位图约定：
+//   位 2..5：状态（ARMED / WAS_EVER_ARMED / SIMULATOR_MODE_*）；位 6..30：阻止解锁原因。
+// 名字与 INAV runtime_config.c 的 armingDisableFlagNames[] 一一对应。
+constexpr uint32_t MSP_ARMING_BLOCK_MASK = 0x7FFFFFC0u;
+constexpr uint32_t MSP_ARMING_ARMED = 1u << 2;
+
+// 把阻止位解码成逗号分隔的简短名字（如 "CAL,RX"）；无阻止位返回空串。
+std::string mspArmingBlockNames(uint32_t arming_flags);
+
+// MSP_MOTOR 的 4 路电机按 INAV 电机序号排列，Quad X 是 [右后, 右前, 左后, 左前]；
+// FDM 的 step() 期望 [右前, 左前, 左后, 右后]（见 fdm.cpp 注释）。
+// 直接透传会让滚转/俯仰/偏航三轴循环错位耦合，仿真里表现为绕着目标点转圈。
+inline std::array<double, 4> mspMotorsToFdmOrder(const std::array<double, 4> &m)
+{
+    return { m[1], m[3], m[2], m[0] };
+}
+
 class MspLink
 {
 public:
@@ -28,7 +51,11 @@ public:
     // 连续失败约 2 秒会断开让位（SITL 每个 UART 只服务一个客户端，见 note_failure）。
     bool poll_motors(std::array<double, 4> &out);
 
-    // 让位开关：外部工具（arm_status.py）通过标志文件请求时置位——暂停轮询并断开
+    // 读一次 MSP2_INAV_STATUS(0x2000) 的 armingFlags（32 位，含高位阻止原因）。
+    // 不能用 MSP_STATUS_EX：那个字段是 u16，位 16 以上的原因（RX/THR/OSD…）会被截断。
+    bool poll_status(uint32_t &arming_flags);
+
+    // 让位开关：外部工具（临时 MSP 工具）通过标志文件请求时置位——暂停轮询并断开
     // 连接，把 SITL 的唯一客户端位让出去；复位后重连，等对方退出自动接管。
     void set_paused(bool paused);
     bool paused() const
@@ -47,7 +74,7 @@ private:
     size_t buf_len_ = 0;
     bool paused_ = false;
     // 让位机制：SITL 每个 UART 只服务一个客户端。连续读不到响应说明端口被别的
-    // 临时客户端（如 arm_status.py）占了——断开让位并退避，稍后重连自动接管。
+    // 临时客户端（如 临时 MSP 工具）占了——断开让位并退避，稍后重连自动接管。
     int fail_run_ = 0;
     std::chrono::steady_clock::time_point retry_after_{};
 };

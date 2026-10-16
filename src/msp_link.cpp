@@ -11,6 +11,7 @@
 namespace
 {
 constexpr uint8_t kMspMotor = 104; // MSP_MOTOR：各电机 PWM（1000..2000）
+constexpr uint16_t kMspStatus = 0x2000; // MSP2_INAV_STATUS：armingFlags 为 32 位（含高位阻止原因）
 constexpr int kRecvTimeoutUs = 20000; // 单次收超时，避免拖住 500Hz 主循环
 constexpr int kFailRunLimit = 100; // 连续失败 ~2 秒（50Hz 轮询）后断开让位
 constexpr std::chrono::milliseconds kRetryBackoff{ 1000 }; // 让位后的重连退避
@@ -37,30 +38,65 @@ double pwm_to_unit(uint16_t pwm)
 }
 } // namespace
 
-bool mspParseMotorFrame(const uint8_t *data, size_t len, std::array<double, 4> &out, size_t *consumed)
+bool mspParseFrame(const uint8_t *data, size_t len, uint16_t want_cmd, const uint8_t **payload, size_t *plen,
+                   size_t *consumed)
 {
-    // MSP v2 响应：$X> + flags(1) + cmd(2) + len(2) + payload + crc(1)
+    // MSP v2 响应：$X> + flags(1) + cmd(u16) + len(u16) + payload + crc(1)
     for (size_t i = 0; i + 9 <= len; ++i)
     {
         if (!(data[i] == '$' && data[i + 1] == 'X' && data[i + 2] == '>'))
         {
             continue;
         }
-        const size_t plen =
-            static_cast<size_t>(data[i + 6] | (static_cast<uint16_t>(data[i + 7]) << 8));
-        if (i + 9 + plen > len) return false; // 帧未收全
-        if (plen < 8) return false;           // 少于 4 路电机
-        const uint8_t *payload = data + i + 8;
-        for (size_t m = 0; m < 4; ++m)
+        const uint16_t cmd = static_cast<uint16_t>(data[i + 4] | (static_cast<uint16_t>(data[i + 5]) << 8));
+        const size_t n = static_cast<size_t>(data[i + 6] | (static_cast<uint16_t>(data[i + 7]) << 8));
+        if (i + 9 + n > len) return false; // 帧未收全
+        if (cmd == want_cmd)
         {
-            const uint16_t pwm = static_cast<uint16_t>(
-                payload[m * 2] | (static_cast<uint16_t>(payload[m * 2 + 1]) << 8));
-            out[m] = pwm_to_unit(pwm);
+            if (payload) *payload = data + i + 8;
+            if (plen) *plen = n;
+            if (consumed) *consumed = i + 9 + n;
+            return true;
         }
-        if (consumed) *consumed = i + 9 + plen;
-        return true;
+        i += 9 + n - 1; // 非目标 cmd：跳过整帧继续找（-1 抵消循环自增）
     }
     return false;
+}
+
+std::string mspArmingBlockNames(uint32_t arming_flags)
+{
+    // 位 6 起对应 INAV armingDisableFlagNames[]，顺序不可改。
+    static const char *const kNames[] = {
+        "GEOZONE",    "FS",         "ANGLE",     "CAL",     "OVRLD",       "NAV",      "COMPASS",
+        "ACC",        "ARMSW",      "HWFAIL",    "BOXFS",   "?",           "RX",       "THR",
+        "CLI",        "CMS",        "OSD",       "ROLL/PITCH", "AUTOTRIM", "OOM",      "SETTINGFAIL",
+        "PWMOUT",     "NOPREARM",   "DSHOTBEEPER", "LANDED"
+    };
+    std::string out;
+    for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); ++i)
+    {
+        if ((arming_flags & (1u << (6 + i))) == 0u) continue;
+        if (!out.empty()) out += ",";
+        out += kNames[i];
+    }
+    return out;
+}
+
+bool mspParseMotorFrame(const uint8_t *data, size_t len, std::array<double, 4> &out, size_t *consumed)
+{
+    const uint8_t *payload = nullptr;
+    size_t plen = 0;
+    size_t used = 0;
+    if (!mspParseFrame(data, len, kMspMotor, &payload, &plen, &used)) return false;
+    if (plen < 8) return false; // 少于 4 路电机
+    for (size_t m = 0; m < 4; ++m)
+    {
+        const uint16_t pwm =
+            static_cast<uint16_t>(payload[m * 2] | (static_cast<uint16_t>(payload[m * 2 + 1]) << 8));
+        out[m] = pwm_to_unit(pwm);
+    }
+    if (consumed) *consumed = used;
+    return true;
 }
 
 MspLink::MspLink(const std::string &host, uint16_t port)
@@ -157,11 +193,60 @@ bool MspLink::poll_motors(std::array<double, 4> &out)
     return note_failure();
 }
 
+bool MspLink::poll_status(uint32_t &arming_flags)
+{
+    if (paused_) return false;
+    if (std::chrono::steady_clock::now() < retry_after_) return false;
+    if (fd_ < 0 && !ensure_connected()) return note_failure();
+
+    // MSP v2 请求：$X< + flags(0) + cmd(u16) + len(u16) + crc8(flags..len)；cmd = 0x2000（LE）
+    uint8_t req[9] = { '$', 'X', '<', 0, 0x00, 0x20, 0, 0, 0 };
+    req[8] = crc8_dvb_s2(&req[3], 5);
+    if (::send(fd_, req, sizeof(req), 0) != static_cast<ssize_t>(sizeof(req)))
+    {
+        ::close(fd_);
+        fd_ = -1;
+        return note_failure();
+    }
+
+    buf_len_ = 0;
+    for (int tries = 0; tries < 16; ++tries)
+    {
+        const ssize_t n = ::recv(fd_, buf_ + buf_len_, sizeof(buf_) - buf_len_, 0);
+        if (n == 0)
+        {
+            ::close(fd_);
+            fd_ = -1;
+            return note_failure();
+        }
+        if (n < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return note_failure();
+            ::close(fd_);
+            fd_ = -1;
+            return note_failure();
+        }
+        buf_len_ += static_cast<size_t>(n);
+        const uint8_t *payload = nullptr;
+        size_t plen = 0;
+        if (mspParseFrame(buf_, buf_len_, kMspStatus, &payload, &plen, nullptr))
+        {
+            // 载荷布局：cycleTime(2) i2c(2) sensors(2) load(2) profile(1) armingFlags(4) …
+            if (plen < 13) return false;
+            arming_flags = static_cast<uint32_t>(payload[9]) | (static_cast<uint32_t>(payload[10]) << 8) |
+                           (static_cast<uint32_t>(payload[11]) << 16) | (static_cast<uint32_t>(payload[12]) << 24);
+            fail_run_ = 0;
+            return true;
+        }
+    }
+    return note_failure();
+}
+
 bool MspLink::note_failure()
 {
     if (++fail_run_ < kFailRunLimit) return false;
 
-    // 连续读不到响应约 2 秒：多半是本端口被别的临时客户端（arm_status.py 等）占了。
+    // 连续读不到响应约 2 秒：多半是本端口被别的临时客户端（临时 MSP 工具 等）占了。
     // 断开让出“活跃客户端”位并退避；重连若排队也无害，对方退出后会被自动接管。
     if (fd_ >= 0)
     {
