@@ -278,7 +278,8 @@ void XplaneLink::send_sensors(const SensorSnapshot &s)
     emit("groundspeed", s.groundspeed);
     emit("true_airspeed", s.airspeed);
     emit("phi", s.phi_deg);
-    emit("theta", -s.theta_deg); // fl2sitl 锚点：INAV 侧 pitch 取反，此处预反
+    // theta 按 X-Plane 语义（正=抬头）原样发：INAV 侧 pitch_inav=-theta，正=低头，不可再取反
+    emit("theta", s.theta_deg);
     emit("psi", s.psi_deg);
     emit("hpath", s.hpath_deg);
     // SITL 固定减去 +981 cm/s^2；直接传法向比力可匹配静止与动态加速度符号。
@@ -287,7 +288,9 @@ void XplaneLink::send_sensors(const SensorSnapshot &s)
     emit("g_nrml", s.g_nrml);
     emit("P", s.gyro_p_dps);
     emit("Q", s.gyro_q_dps);
-    emit("R", s.gyro_r_dps);
+    // R 与 psi 必须自洽：INAV 侧 psi 不取反、gyro_z 取反（xplane.c fakeGyroSet(gyro_x,+,-gyro_y,-gyro_z)），
+    // 故 X-Plane 语义的 R 应为本机 yaw 角速度的相反数，否则角速度内环反馈反向。
+    emit("R", -s.gyro_r_dps);
     emit("barometer_current_inhg", s.baro_inhg);
     // XITL 扩展
     emit("magnetometer[0]", s.mag_x);

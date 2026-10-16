@@ -30,7 +30,7 @@ struct SensorSnapshot
     float groundspeed = 0; // 地速（米/秒）
     float airspeed = 0; // 空速（多旋翼≈地速+垂直分量）
     float phi_deg = 0; // 横滚
-    float theta_deg = 0; // 俯仰（注意 INAV 侧取反，见 fl2sitl 锚点）
+    float theta_deg = 0; // 俯仰（抬头为正，X-Plane theta 语义）
     float psi_deg = 0; // 真航向
     float hpath_deg = 0; // 地面航迹
     float g_axil = 0; // 过载-前向（g）
