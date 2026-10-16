@@ -5,11 +5,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <ctime>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 
 #include "config.hpp"
 #include "fdm.hpp"
+#include "msp_link.hpp"
 #include "xplane_link.hpp"
 
 namespace
@@ -18,6 +21,17 @@ std::atomic<bool> g_stop{ false };
 void on_signal(int)
 {
     g_stop = true;
+}
+
+// 与 arm_status.py 的约定：该标志文件存在（且不太旧）时让出 MSP 口。
+// SITL 每个 UART 只服务一个客户端，桥长期占用会饿死其它工具（见 msp_link.hpp）。
+bool mspYieldRequested(uint16_t msp_port)
+{
+    char path[64];
+    std::snprintf(path, sizeof(path), "/tmp/maplrs_msp_yield_%u", static_cast<unsigned>(msp_port));
+    struct stat st{};
+    if (::stat(path, &st) != 0) return false;
+    return (std::time(nullptr) - st.st_mtime) <= 60; // 60 秒 TTL，防工具被强杀后卡死
 }
 } // namespace
 
@@ -66,6 +80,8 @@ int main(int argc, char **argv)
     auto next = std::chrono::steady_clock::now() + period;
     auto last_status = std::chrono::steady_clock::now();
     std::array<double, 4> motors{ 0, 0, 0, 0 };
+    MspLink msp(cfg.sitl_ip, cfg.msp_port);
+    unsigned msp_tick = 0;
 
     while (!g_stop)
     {
@@ -76,7 +92,28 @@ int main(int argc, char **argv)
         if (now - next > period * 5) next = now + period;
 
         std::array<double, 4> m;
-        if (xp.get_motors(m)) motors = m;
+        if (cfg.msp_port != 0)
+        {
+            // MSP 模式：50Hz 轮询电机真值（TCP 往返不宜每周期做），其余周期沿用上次结果。
+            // X-Plane 通道只有总油门 + 舵面，多旋翼姿态差动传不出来，只能走 MSP。
+            ++msp_tick;
+            if (msp_tick % 100U == 0) // 5Hz 查让位标志（arm_status.py 等工具占用时）
+            {
+                const bool yield = mspYieldRequested(cfg.msp_port);
+                if (yield != msp.paused())
+                {
+                    std::printf("[UAV %u] MSP %s\n", cfg.instance_id,
+                                yield ? "让位：暂停轮询，把口让给工具" : "恢复轮询");
+                    std::fflush(stdout);
+                    msp.set_paused(yield);
+                }
+            }
+            if (msp_tick % 10U == 0 && msp.poll_motors(m)) motors = m;
+        }
+        else if (xp.get_motors(m))
+        {
+            motors = m; // X-Plane 回退路径（总油门 + 舵面重构）
+        }
         SensorSnapshot s = fdm.step(motors, period.count());
         xp.send_sensors(s);
 

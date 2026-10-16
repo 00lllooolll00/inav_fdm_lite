@@ -15,6 +15,7 @@ void print_usage(const char *prog)
                 "    -p <port>               SITL 的 UDP 端口 simport（默认 49000）\n"
                 "    -l <port>               本地监听 UDP 端口（默认与 -p 相同，单 socket 复用）\n"
                 "    -r <hz>                 物理推演与注入刷新率（默认 500）\n"
+                "    --msp-port <port>       SITL 的 MSP 口（TCP，如 5771）：开则电机值取 MSP 真值\n"
                 "\n"
                 "  实例与地理:\n"
                 "    --lat <deg>             初始纬度（默认 30.6570）\n"
@@ -82,6 +83,7 @@ int parse_args(int argc, char **argv, BridgeConfig &out, bool &help_only)
         { "mass",       required_argument, nullptr, 1008 },
         { "max-thrust", required_argument, nullptr, 1009 },
         { "arm-alt",    required_argument, nullptr, 1010 },
+        { "msp-port",   required_argument, nullptr, 1011 },
         { "help",       no_argument,       nullptr, 'h'  },
         { nullptr,      0,                 nullptr, 0    },
     };
@@ -172,6 +174,13 @@ int parse_args(int argc, char **argv, BridgeConfig &out, bool &help_only)
                 if (!parse_double(optarg, out.arm_alt_m))
                 {
                     std::fprintf(stderr, "非法 --arm-alt: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1011:
+                if (!parse_u16(optarg, out.msp_port))
+                {
+                    std::fprintf(stderr, "非法 --msp-port: %s\n", optarg);
                     return 2;
                 }
                 break;

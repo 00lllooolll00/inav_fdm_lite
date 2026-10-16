@@ -11,6 +11,8 @@ struct BridgeConfig
     uint16_t simport = 49000; // -p：SITL 的 UDP 端口（RREF/DREF 对端）
     uint16_t listen_port = 49000; // -l：本地监听端口（默认与 -p 相同，单 socket 复用）
     double rate_hz = 500.0; // -r：物理推演与注入刷新率
+    uint16_t msp_port = 0; // --msp-port：SITL 的 MSP 口（0=关闭）。开则电机值优先取 MSP，
+                           // 因为 X-Plane 通道只有总油门+舵面，多旋翼姿态差动传不出来
 
     // --- 实例与地理 ---
     double init_lat = 30.6570; // --lat（默认成都天府广场）

@@ -15,7 +15,7 @@
   X-Plane UDP = 49000+i。
 
 日志带 [组号] 前缀实时输出；串口桥断线自动重连；Ctrl-C 退出并回收全部子进程。
-依赖 pyserial；首次使用先 `just build` 编译 bridge。
+依赖 pyserial；首次使用先 `just release`（优先）或 `just build` 编译 bridge。
 """
 import os
 import shutil
@@ -28,7 +28,10 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SITL_BIN = os.path.join(ROOT, "inav_sitl", "inav_10.0.0_SITL")
-BRIDGE_BIN = os.path.join(ROOT, "build", "inav_sitl_bridge")
+# 桥优先用 release 优化版（500Hz 长跑更省 CPU），没有则回退默认构建产物
+BRIDGE_BIN = os.path.join(ROOT, "build-release", "inav_sitl_bridge")
+if not os.path.exists(BRIDGE_BIN):
+    BRIDGE_BIN = os.path.join(ROOT, "build", "inav_sitl_bridge")
 EEPROM_DIR = os.path.join(ROOT, "inav_sitl", "eeprom")
 WORK_DIR = "/tmp/maplrs_sitl_air"
 BAUD = 115200
@@ -175,7 +178,7 @@ def main():
 
     for path in (SITL_BIN, BRIDGE_BIN):
         if not os.path.exists(path):
-            sys.exit(f"缺 {path}（bridge 先 `just build`）")
+            sys.exit(f"缺 {path}（bridge 先 `just release` 或 `just build`）")
     try:
         import serial                                # noqa: F401
     except ImportError:
@@ -203,7 +206,8 @@ def main():
                 stdin=subprocess.DEVNULL, cwd=ROOT)
             bridge = subprocess.Popen(
                 [BRIDGE_BIN, "--id", str(u.idx + 1), "--lat", u.lat, "--lon", u.lon,
-                 "--alt", "10.0", "-p", str(u.sim_port), "-l", str(u.sim_port), "-r", "500"],
+                 "--alt", "10.0", "-p", str(u.sim_port), "-l", str(u.sim_port), "-r", "500",
+                 "--msp-port", str(u.tcp_base + 1)],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL, cwd=ROOT)
             procs += [sitl, bridge]

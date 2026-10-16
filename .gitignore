@@ -1,5 +1,6 @@
 build/
 build-release/
+__pycache__/
 *.o
 *.a
 *.so

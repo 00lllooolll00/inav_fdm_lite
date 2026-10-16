@@ -18,6 +18,7 @@ add_executable(inav_sitl_bridge
   src/config.cpp
   src/fdm.cpp
   src/xplane_link.cpp
+  src/msp_link.cpp
 )
 target_include_directories(inav_sitl_bridge PRIVATE inc)
 target_link_libraries(inav_sitl_bridge PRIVATE pthread)
@@ -28,6 +29,7 @@ add_executable(bridge_selftest
   src/config.cpp
   src/fdm.cpp
   src/xplane_link.cpp
+  src/msp_link.cpp
 )
 target_include_directories(bridge_selftest PRIVATE inc)
 target_link_libraries(bridge_selftest PRIVATE pthread)

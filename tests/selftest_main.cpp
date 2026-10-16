@@ -4,9 +4,11 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "config.hpp"
 #include "fdm.hpp"
+#include "msp_link.hpp"
 #include "xplane_link.hpp"
 
 namespace
@@ -82,6 +84,55 @@ void test_fdm_attitude_response()
     CHECK(std::fabs(mag_norm - 1.0) < 1e-6, "quaternion rotation remains normalized");
 }
 
+// 水平平移：后侧电机推力略大 → 低头 → 机头朝北（yaw=0）时向北更新经纬度
+void test_fdm_horizontal_translation()
+{
+    QuadFdm fdm(1.2, 30.0, 10.0);
+    fdm.reset(30.0, 120.0, 100.0, 0.0);
+    const double hov = 1.2 * 9.80665 / 30.0;
+    const std::array<double, 4> m{ hov - 0.02, hov - 0.02, hov + 0.02, hov + 0.02 };
+    for (int i = 0; i < 30; ++i) fdm.step(m, 0.02); // 0.6 秒
+    CHECK(fdm.state().pitch_deg < 0.0, "rear thrust bias pitches nose down");
+    CHECK(fdm.state().vn > 0.05, "nose-down gives north velocity");
+    CHECK(fdm.state().lat_deg > 30.0, "latitude integrated north");
+    CHECK(std::fabs(fdm.state().lon_deg - 120.0) < 1e-9, "no east drift on yaw=0");
+}
+
+// --- MSP ---
+void test_msp_motor_frame()
+{
+    // MSP v2 响应：$X> + flags + cmd(u16) + len(u16=16) + 8×PWM + crc（解析不校验 crc）
+    const uint8_t frame[] = {
+        '$', 'X', '>',
+        0,       // flags
+        104, 0,  // cmd = 104（MSP_MOTOR）
+        16, 0,   // len = 16（8 路，只取前 4 路）
+        0xE8, 0x03, // 1000 → 0.00
+        0xE8, 0x07, // 2000 → 1.00
+        0xF4, 0x06, // 1780 → 0.78
+        0xD0, 0x07, // 2000 → 1.00
+        0xE8, 0x03, 0xE8, 0x03, 0xE8, 0x03, 0xE8, 0x03, // 后 4 路 1000
+        0x00,       // crc
+    };
+    std::array<double, 4> m{};
+    CHECK(mspParseMotorFrame(frame, sizeof(frame), m, nullptr), "msp frame parsed");
+    CHECK(std::fabs(m[0] - 0.00) < 1e-9, "msp motor0 1000");
+    CHECK(std::fabs(m[1] - 1.00) < 1e-9, "msp motor1 2000");
+    CHECK(std::fabs(m[2] - 0.78) < 1e-9, "msp motor2 1780");
+    CHECK(std::fabs(m[3] - 1.00) < 1e-9, "msp motor3 2000");
+
+    std::array<double, 4> m2{};
+    CHECK(!mspParseMotorFrame(frame, 8, m2, nullptr), "msp partial frame needs more bytes");
+
+    uint8_t noisy[sizeof(frame) + 3] = { 0xAA, 0xBB, 0xCC };
+    std::memcpy(noisy + 3, frame, sizeof(frame));
+    std::array<double, 4> m3{};
+    size_t used = 0;
+    CHECK(mspParseMotorFrame(noisy, sizeof(noisy), m3, &used), "msp frame after noise");
+    CHECK(std::fabs(m3[2] - 0.78) < 1e-9, "msp noisy motor2");
+    CHECK(used == 3 + sizeof(frame), "msp consumed bytes");
+}
+
 // --- 配置 ---
 void test_config_defaults()
 {
@@ -116,6 +167,8 @@ int main()
     test_fdm_gyroscopic_coupling();
     test_fdm_climb_and_ground();
     test_fdm_attitude_response();
+    test_fdm_horizontal_translation();
+    test_msp_motor_frame();
     test_config_defaults();
     test_config_multi();
     if (g_fail == 0)

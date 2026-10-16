@@ -3,7 +3,9 @@
 
 用法：python3 arm_status.py [msp端口]
 位定义来自 INAV src/main/fc/runtime_config.h；盒激活判定 (rc-900)/25 落在配置范围内。
+SITL 每个 UART 只服务一个客户端：本工具先写标志文件请仿真桥让位，退出时自动删除。
 """
+import os
 import socket
 import struct
 import sys
@@ -66,9 +68,33 @@ def ask(sock, cmd):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5771
+    # 请仿真桥让位：SITL 每个 UART 口只服务第一个客户端，桥长期占着会让本工具读不到数据
+    flag = f"/tmp/maplrs_msp_yield_{port}"
+    try:
+        with open(flag, "w", encoding="ascii") as f:
+            f.write(str(time.time()))
+    except OSError:
+        flag = None
+    try:
+        run(port)
+    finally:
+        if flag:
+            try:
+                os.remove(flag)
+            except OSError:
+                pass
+
+
+def run(port):
     s = socket.create_connection(("127.0.0.1", port), timeout=2)
 
-    p = ask(s, 150)                                  # MSP_STATUS_EX
+    # 等桥让位：最多 4 秒；期间的连接会排队，桥一断开即被 SITL 接管
+    p = None
+    deadline = time.time() + 4.0
+    while p is None and time.time() < deadline:
+        p = ask(s, 150)                              # MSP_STATUS_EX
+        if p is None:
+            time.sleep(0.4)
     arming = None
     if p and len(p) >= 16:
         arming = struct.unpack("<H", p[13:15])[0]
@@ -83,7 +109,8 @@ def main():
     chans = ()
     if rc_payload:
         chans = struct.unpack(f"<{len(rc_payload) // 2}H", rc_payload)
-        print(f"RC 通道: {list(chans[:9])}")
+        # 顺序按 INAV 的 rcData：roll/pitch/yaw/throttle 后接 aux1..，不是 CH1.. 的编号顺序
+        print(f"RC 通道(roll,pitch,yaw,thr,aux1..): {list(chans[:9])}")
 
     ids = ask(s, 119)                                # MSP_BOXIDS（永久 id）
     names = ask(s, 116)                              # MSP_BOXNAMES
