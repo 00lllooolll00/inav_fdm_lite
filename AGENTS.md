@@ -34,8 +34,8 @@ SITL 到桥：
 - `inc/`：公共头文件，当前为 `config.hpp`、`fdm.hpp`、`xplane_link.hpp`。
 - `src/`：生产实现；入口、参数解析、FDM 和 X-Plane UDP 链路。
 - `tests/`：自写断言式单元自检。
-- `scripts/`：`duo.sh` 双实例 SITL + bridge 演示脚本；`sitl_air.py` 前台常驻联调（每组 `<串口>=<eeprom>[@lat,lon]` 一套 SITL+FDM+串口桥，可多组，日志带组号，Ctrl-C 退出）。
-- `inav_sitl/`：用户提供的 SITL 二进制和 EEPROM；运行测试时使用工作副本，避免修改基线。
+- `scripts/`：`duo.sh` 双实例 SITL + bridge 演示脚本（`sitl_air.py` 串口联调随 SITL 资产移到主仓 `inav_sitl/`）。
+- SITL 二进制与 EEPROM 基线不在本仓：主仓 `inav_sitl/`（`inav_10.0.0_SITL`、`eeprom/`、`run_3sitl.sh`）；运行测试时使用工作副本，避免修改基线。
 - `build/`、`build-release/`：CMake/Ninja 生成物，已被 `.gitignore` 忽略。
 
 ## Development Commands
@@ -113,6 +113,6 @@ just test
 just ctest
 ```
 
-涉及 FDM、坐标符号、UDP 协议或默认参数的改动，还应做真实 SITL 联调。`xplane_link` 的网络编解码、主循环时序、多实例行为和 `chanmap` 仍主要依赖手动 SITL 验证，CTest 没有网络集成用例。SITL EEPROM 应先复制到 `/tmp` 或独立工作目录，避免 `save` 污染 `inav_sitl/` 基线。
+涉及 FDM、坐标符号、UDP 协议或默认参数的改动，还应做真实 SITL 联调。`xplane_link` 的网络编解码、主循环时序、多实例行为和 `chanmap` 仍主要依赖手动 SITL 验证，CTest 没有网络集成用例。SITL EEPROM 应先复制到 `/tmp` 或独立工作目录，避免 `save` 污染主仓 `inav_sitl/eeprom/` 基线。
 
 已知限制：X-Plane 多旋翼控制量不足以表达完整姿态差动，水平位置闭环受限；FDM 不包含电机转速动态、旋翼入流、气动系数、风场和完整起落架模型。
