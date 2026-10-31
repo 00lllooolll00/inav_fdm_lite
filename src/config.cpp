@@ -27,6 +27,15 @@ void print_usage(const char *prog)
                 "    --mass <kg>             机体质量（默认 1.2）\n"
                 "    --max-thrust <N>        全油门总推力（默认 30.0）\n"
                 "    --arm-alt <m>           地面高度 AMSL（默认 = --alt，即地面起飞）\n"
+                "    --ixx/--iyy/--izz <kgm2> 三轴转动惯量（默认 0.02/0.02/0.04）\n"
+                "    --arm <m>               电机力臂（默认 0.11）\n"
+                "    --yaw-k <coef>          反扭矩系数（默认 0.02）\n"
+                "    --motor-tau <s>         电机一阶惯性时间常数，0=瞬时（默认 0.03）\n"
+                "    --thrust-exp <n>        推力曲线 T=Tmax*thr^n（默认 1.0）\n"
+                "    --drag <1/s>            线性阻力（默认 0.25）\n"
+                "    --drag-quad <1/m>       二次阻力（默认 0）\n"
+                "    --wind-n/e/d <m/s>      常值风 NED（默认 0）\n"
+                "    --ground-friction <1/s> 地面水平摩擦（默认 5）\n"
                 "    -v                      详细日志\n"
                 "    -h, --help              显示本帮助\n"
                 "\n"
@@ -74,18 +83,33 @@ int parse_args(int argc, char **argv, BridgeConfig &out, bool &help_only)
     out = BridgeConfig{};
     help_only = false;
     bool listen_set = false;
+    // getopt_long 状态是全局的；同一进程内多次 parse_args 必须显式复位。
+    optind = 1;
 
     static const struct option kLongOpts[] = {
-        { "lat",        required_argument, nullptr, 1003 },
-        { "lon",        required_argument, nullptr, 1004 },
-        { "alt",        required_argument, nullptr, 1005 },
-        { "id",         required_argument, nullptr, 1006 },
-        { "mass",       required_argument, nullptr, 1008 },
-        { "max-thrust", required_argument, nullptr, 1009 },
-        { "arm-alt",    required_argument, nullptr, 1010 },
-        { "msp-port",   required_argument, nullptr, 1011 },
-        { "help",       no_argument,       nullptr, 'h'  },
-        { nullptr,      0,                 nullptr, 0    },
+        { "lat",             required_argument, nullptr, 1003 },
+        { "lon",             required_argument, nullptr, 1004 },
+        { "alt",             required_argument, nullptr, 1005 },
+        { "id",              required_argument, nullptr, 1006 },
+        { "mass",            required_argument, nullptr, 1008 },
+        { "max-thrust",      required_argument, nullptr, 1009 },
+        { "arm-alt",         required_argument, nullptr, 1010 },
+        { "msp-port",        required_argument, nullptr, 1011 },
+        { "ixx",             required_argument, nullptr, 1012 },
+        { "iyy",             required_argument, nullptr, 1013 },
+        { "izz",             required_argument, nullptr, 1014 },
+        { "arm",             required_argument, nullptr, 1015 },
+        { "yaw-k",           required_argument, nullptr, 1016 },
+        { "motor-tau",       required_argument, nullptr, 1017 },
+        { "thrust-exp",      required_argument, nullptr, 1018 },
+        { "drag",            required_argument, nullptr, 1019 },
+        { "drag-quad",       required_argument, nullptr, 1020 },
+        { "ground-friction", required_argument, nullptr, 1021 },
+        { "wind-n",          required_argument, nullptr, 1022 },
+        { "wind-e",          required_argument, nullptr, 1023 },
+        { "wind-d",          required_argument, nullptr, 1024 },
+        { "help",            no_argument,       nullptr, 'h'  },
+        { nullptr,           0,                 nullptr, 0    },
     };
 
     int opt;
@@ -181,6 +205,97 @@ int parse_args(int argc, char **argv, BridgeConfig &out, bool &help_only)
                 if (!parse_u16(optarg, out.msp_port))
                 {
                     std::fprintf(stderr, "非法 --msp-port: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1012:
+                if (!parse_double(optarg, out.ixx) || out.ixx <= 0)
+                {
+                    std::fprintf(stderr, "非法 --ixx: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1013:
+                if (!parse_double(optarg, out.iyy) || out.iyy <= 0)
+                {
+                    std::fprintf(stderr, "非法 --iyy: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1014:
+                if (!parse_double(optarg, out.izz) || out.izz <= 0)
+                {
+                    std::fprintf(stderr, "非法 --izz: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1015:
+                if (!parse_double(optarg, out.arm_m) || out.arm_m <= 0)
+                {
+                    std::fprintf(stderr, "非法 --arm: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1016:
+                if (!parse_double(optarg, out.yaw_k) || out.yaw_k < 0)
+                {
+                    std::fprintf(stderr, "非法 --yaw-k: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1017:
+                if (!parse_double(optarg, out.motor_tau_s) || out.motor_tau_s < 0)
+                {
+                    std::fprintf(stderr, "非法 --motor-tau: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1018:
+                if (!parse_double(optarg, out.thrust_exponent) || out.thrust_exponent <= 0)
+                {
+                    std::fprintf(stderr, "非法 --thrust-exp: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1019:
+                if (!parse_double(optarg, out.drag_linear) || out.drag_linear < 0)
+                {
+                    std::fprintf(stderr, "非法 --drag: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1020:
+                if (!parse_double(optarg, out.drag_quadratic) || out.drag_quadratic < 0)
+                {
+                    std::fprintf(stderr, "非法 --drag-quad: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1021:
+                if (!parse_double(optarg, out.ground_friction) || out.ground_friction < 0)
+                {
+                    std::fprintf(stderr, "非法 --ground-friction: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1022:
+                if (!parse_double(optarg, out.wind_n))
+                {
+                    std::fprintf(stderr, "非法 --wind-n: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1023:
+                if (!parse_double(optarg, out.wind_e))
+                {
+                    std::fprintf(stderr, "非法 --wind-e: %s\n", optarg);
+                    return 2;
+                }
+                break;
+            case 1024:
+                if (!parse_double(optarg, out.wind_d))
+                {
+                    std::fprintf(stderr, "非法 --wind-d: %s\n", optarg);
                     return 2;
                 }
                 break;

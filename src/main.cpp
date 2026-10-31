@@ -55,7 +55,24 @@ int main(int argc, char **argv)
     };
 
     // 动力学
-    QuadFdm fdm(cfg.mass_kg, cfg.max_thrust_n, cfg.arm_alt_m);
+    FdmParams fdm_params;
+    fdm_params.mass_kg = cfg.mass_kg;
+    fdm_params.max_thrust_n = cfg.max_thrust_n;
+    fdm_params.ground_alt_m = cfg.arm_alt_m;
+    fdm_params.ixx = cfg.ixx;
+    fdm_params.iyy = cfg.iyy;
+    fdm_params.izz = cfg.izz;
+    fdm_params.arm_m = cfg.arm_m;
+    fdm_params.yaw_k = cfg.yaw_k;
+    fdm_params.motor_tau_s = cfg.motor_tau_s;
+    fdm_params.thrust_exponent = cfg.thrust_exponent;
+    fdm_params.drag_linear = cfg.drag_linear;
+    fdm_params.drag_quadratic = cfg.drag_quadratic;
+    fdm_params.wind_n = cfg.wind_n;
+    fdm_params.wind_e = cfg.wind_e;
+    fdm_params.wind_d = cfg.wind_d;
+    fdm_params.ground_friction = cfg.ground_friction;
+    QuadFdm fdm(fdm_params);
     fdm.reset(cfg.init_lat, cfg.init_lon, cfg.init_alt);
 
     // UDP 链路

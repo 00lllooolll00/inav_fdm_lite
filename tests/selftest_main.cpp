@@ -66,7 +66,35 @@ void test_fdm_climb_and_ground()
     for (int i = 0; i < 400; ++i) s = fdm.step(zero, 0.02);
     CHECK(std::fabs(s.alt_m - 10.0) < 1e-6, "ground clamp");
     CHECK(s.agl_m == 0, "agl zero");
+    CHECK(s.rangefinder_cm == 0, "ground rangefinder zero");
     CHECK(std::fabs(s.g_nrml - 1.0) < 0.05, "ground load 1g");
+}
+
+void test_fdm_thrust_curve_and_params()
+{
+    FdmParams p;
+    p.thrust_exponent = 2.0;
+    p.motor_tau_s = 0.0;
+    QuadFdm fdm(p);
+    fdm.reset(30.0, 120.0, 100.0);
+    const double hover = std::sqrt(1.2 * 9.80665 / 30.0);
+    const std::array<double, 4> m{ hover, hover, hover, hover };
+    SensorSnapshot s;
+    for (int i = 0; i < 200; ++i) s = fdm.step(m, 0.02);
+    CHECK(std::fabs(s.alt_m - 100.0) < 1.0, "quadratic thrust hover");
+}
+
+void test_fdm_wind()
+{
+    FdmParams p;
+    p.motor_tau_s = 0.0;
+    p.drag_linear = 1.0;
+    p.wind_e = 2.0;
+    QuadFdm fdm(p);
+    fdm.reset(30.0, 120.0, 100.0);
+    SensorSnapshot s;
+    for (int i = 0; i < 50; ++i) s = fdm.step({ 0, 0, 0, 0 }, 0.02);
+    CHECK(s.local_vx > 0.5, "wind accelerates airframe");
 }
 
 void test_fdm_attitude_response()
@@ -210,6 +238,24 @@ void test_config_multi()
     CHECK(std::fabs(c.arm_alt_m - 5.0) < 1e-9, "cfg arm-alt explicit");
     CHECK(std::fabs(c.init_lat - 31.5) < 1e-9, "cfg lat");
 }
+void test_config_fdm_params()
+{
+    char a0[] = "prog", a1[] = "--motor-tau", a2[] = "0", a3[] = "--thrust-exp", a4[] = "2", a5[] = "--drag-quad",
+         a6[] = "0.1", a7[] = "--wind-n", a8[] = "1.0", a9[] = "--arm", a10[] = "0.2", a11[] = "--ixx", a12[] = "0.01",
+         a13[] = "--ground-friction", a14[] = "2.0";
+    char *argv[] = { a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14 };
+    BridgeConfig c;
+    bool help = false;
+    CHECK(parse_args(15, argv, c, help) == 0, "cfg fdm params rc");
+    CHECK(std::fabs(c.motor_tau_s) < 1e-12, "cfg motor tau");
+    CHECK(std::fabs(c.thrust_exponent - 2.0) < 1e-12, "cfg thrust exponent");
+    CHECK(std::fabs(c.drag_quadratic - 0.1) < 1e-12, "cfg drag quad");
+    CHECK(std::fabs(c.wind_n - 1.0) < 1e-12, "cfg wind");
+    CHECK(std::fabs(c.arm_m - 0.2) < 1e-12, "cfg arm");
+    CHECK(std::fabs(c.ixx - 0.01) < 1e-12, "cfg inertia");
+    CHECK(std::fabs(c.ground_friction - 2.0) < 1e-12, "cfg ground friction");
+}
+
 } // namespace
 
 int main()
@@ -217,6 +263,8 @@ int main()
     test_fdm_hover();
     test_fdm_gyroscopic_coupling();
     test_fdm_climb_and_ground();
+    test_fdm_thrust_curve_and_params();
+    test_fdm_wind();
     test_fdm_attitude_response();
     test_fdm_horizontal_translation();
     test_msp_motor_frame();
@@ -224,6 +272,7 @@ int main()
     test_msp_motor_order();
     test_config_defaults();
     test_config_multi();
+    test_config_fdm_params();
     if (g_fail == 0)
     {
         std::printf("SELFTEST PASS\n");

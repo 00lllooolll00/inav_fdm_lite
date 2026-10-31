@@ -51,9 +51,32 @@ struct SensorSnapshot
 };
 
 // 轻量四旋翼 Newton-Euler 刚体模型（不含完整气动、旋翼动态或地面起落架模型）。
+struct FdmParams
+{
+    double mass_kg = 1.2;
+    double max_thrust_n = 30.0;
+    double ground_alt_m = 10.0;
+    // 转动惯量与力臂
+    double ixx = 0.02, iyy = 0.02, izz = 0.04;
+    double arm_m = 0.11;
+    double yaw_k = 0.02;
+    // 电机一阶惯性时间常数；0 表示瞬时响应
+    double motor_tau_s = 0.03;
+    // 推力曲线：T = Tmax * throttle^thrust_exponent
+    double thrust_exponent = 1.0;
+    // 气动阻尼：线性项 1/s，二次项 1/m
+    double drag_linear = 0.25;
+    double drag_quadratic = 0.0;
+    // 常值风（NED，m/s，向下为正）
+    double wind_n = 0.0, wind_e = 0.0, wind_d = 0.0;
+    // 地面水平摩擦时间常数，1/s；0 表示不额外阻尼
+    double ground_friction = 5.0;
+};
+
 class QuadFdm
 {
 public:
+    explicit QuadFdm(const FdmParams &params);
     QuadFdm(double mass_kg, double max_thrust_n, double ground_alt_m);
 
     void reset(double lat, double lon, double alt, double yaw_deg = 0);
@@ -72,13 +95,8 @@ public:
 
 private:
     FdmState st_{};
-    double mass_ = 1.2;
-    double max_thrust_ = 30.0;
-    double ground_alt_ = 10.0;
+    FdmParams params_{};
     std::array<double, 4> q_body_to_ned_{ 1, 0, 0, 0 };
+    std::array<double, 4> motor_state_{ 0, 0, 0, 0 };
     double avg_thr_ = 0;
-    // 转动惯量（kg·m²，典型 5 寸机放大值，手感稳）
-    double ixx_ = 0.02, iyy_ = 0.02, izz_ = 0.04;
-    double arm_m_ = 0.11; // 轴距臂长
-    double yaw_k_ = 0.02; // 反扭矩系数
 };

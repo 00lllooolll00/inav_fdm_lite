@@ -24,6 +24,15 @@ struct BridgeConfig
     double mass_kg = 1.2; // --mass
     double max_thrust_n = 30.0; // --max-thrust（悬停油门≈mass*g/max_thrust）
     double arm_alt_m = 0.0; // --arm-alt（<0=水面起飞等特殊场景，默认地面=init_alt）
+    double ixx = 0.02, iyy = 0.02, izz = 0.04; // 转动惯量 kg·m²
+    double arm_m = 0.11; // 电机力臂 m
+    double yaw_k = 0.02; // 反扭矩系数
+    double motor_tau_s = 0.03; // 电机一阶惯性时间常数
+    double thrust_exponent = 1.0; // 推力曲线指数
+    double drag_linear = 0.25; // 线性阻力 1/s
+    double drag_quadratic = 0.0; // 二次阻力 1/m
+    double wind_n = 0.0, wind_e = 0.0, wind_d = 0.0; // 常值风 NED m/s
+    double ground_friction = 5.0; // 地面水平摩擦 1/s
     bool verbose = false; // -v
 };
 

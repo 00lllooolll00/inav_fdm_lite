@@ -15,7 +15,7 @@ X-Plane 接口给出的多旋翼控制量不足以表达每个电机的差动，
 
 ## 动力学范围
 
-FDM 使用机体系 FRD 和局部地理系 NED，以简化 Newton-Euler 方程及归一化四元数推进姿态、速度和位置。电机命令线性映射到推力，转动惯量、反扭矩和阻尼为简化参数，地面使用防穿透钳位；没有电机转速动态、旋翼入流、气动系数、风场或起落架接触模型。坐标系与刚体运动方程参考 [JSBSim 坐标系说明](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/user/concepts/frames-of-reference.md) 和 [运动方程](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/formulation/equations-of-motion.md)，本项目不链接 JSBSim。
+FDM 使用机体系 FRD 和局部地理系 NED，以简化 Newton-Euler 方程及归一化四元数推进姿态、速度和位置。电机命令经一阶惯性（默认时间常数 `30 ms`）后按 `thrust_exp` 曲线映射到推力（默认 `1.0` 保持线性）；平动阻力相对空气速度计算，支持线性项、二次项和常值 NED 风；地面使用防穿透钳位、水平摩擦和姿态调平，转动惯量、反扭矩和角阻尼为简化参数。没有旋翼入流、气动系数、湍流/风切变、电池电压或起落架接触模型。坐标系与刚体运动方程参考 [JSBSim 坐标系说明](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/user/concepts/frames-of-reference.md) 和 [运动方程](https://github.com/JSBSim-Team/jsbsim-reference-manual/blob/master/docs/formulation/equations-of-motion.md)，本项目不链接 JSBSim。
 
 ## 构建与测试
 
@@ -74,11 +74,20 @@ just clean   # 清理构建目录
 | `--mass` | `1.2` | 机体质量（kg） |
 | `--max-thrust` | `30` | 全油门总推力（N） |
 | `--arm-alt` | 与 `--alt` 相同 | 地面高度 AMSL |
+| `--ixx` / `--iyy` / `--izz` | `0.02` / `0.02` / `0.04` | 三轴转动惯量（kg·m²） |
+| `--arm` | `0.11` | 电机力臂（m） |
+| `--yaw-k` | `0.02` | 反扭矩系数 |
+| `--motor-tau` | `0.03` | 电机一阶惯性时间常数（s），`0` 为瞬时响应 |
+| `--thrust-exp` | `1.0` | 推力曲线指数，`2.0` 为平方油门 |
+| `--drag` | `0.25` | 线性气动阻力（1/s） |
+| `--drag-quad` | `0` | 二次气动阻力（1/m） |
+| `--wind-n` / `--wind-e` / `--wind-d` | `0` | 常值风 NED 分量（m/s） |
+| `--ground-friction` | `5` | 地面水平摩擦（1/s） |
 | `-v` | 关闭 | 输出详细 FDM 状态 |
 
 ## 验证与限制
 
-- 自检覆盖 FDM 悬停、爬升、触地、姿态响应、陀螺耦合和多实例参数解析。
+- 自检覆盖 FDM 悬停、爬升、触地/地面测距、姿态响应、陀螺耦合、平方推力曲线和多实例参数解析。
 - 已用 INAV SITL 验证 X-Plane UDP 建联、电机 DREF 接收及传感器注入，并完成 ACRO 起飞/降落和模式切换联调。
 - POSHOLD 高度环已在用户提供的 INAV SITL 固件上验证：默认 `500 Hz` 注入时最后 10 秒高度跨度约 `0.02 m`、垂向速度为 `0`。若使用 `50 Hz` 注入而保留 SITL 默认加计滤波配置，滤波延迟会导致高度环振荡；应优先保持 `500 Hz`，或在临时测试 EEPROM 中关闭 `acc_lpf_hz`。
 - 当前 X-Plane 多旋翼输出缺少姿态差动输入，水平位置控制能力受限。
